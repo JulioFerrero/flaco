@@ -26,7 +26,9 @@ else
   OBJECTS=""
   for src in $SOURCES; do
     obj=build/obj/$(basename "$src").o
-    xcrun -sdk iphoneos clang -arch armv7s -miphoneos-version-min=10.0 -isysroot "$SDK" $FLAGS -c "$src" -o "$obj"
+    # -marm: today's linker doesn't set the Thumb bit on the entry point or on pointers to Thumb functions,
+    # so iOS 10 would run Thumb code as ARM. All-ARM code needs no such bit.
+    xcrun -sdk iphoneos clang -arch armv7s -marm -miphoneos-version-min=10.0 -isysroot "$SDK" $FLAGS -c "$src" -o "$obj"
     OBJECTS="$OBJECTS $obj"
   done
   xcrun -sdk iphoneos clang -arch armv7s -miphoneos-version-min=10.0 -isysroot $STUBS $FRAMEWORKS $OBJECTS -o $APP/FlacoLite
