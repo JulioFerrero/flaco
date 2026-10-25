@@ -11,7 +11,6 @@ final class PlayerHeaderView: UIView {
     private let cover = CoverView(radius: 3)
     private let title = UILabel(font: Fonts.text(15, .semibold))
     private let subtitle = UILabel(font: Fonts.text(12.5))
-    private let tech = UILabel(font: Fonts.mono(10.5))
     private let panel = UIView()
 
     override init(frame: CGRect) {
@@ -22,7 +21,7 @@ final class PlayerHeaderView: UIView {
         cover.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(coverTapped)))
         cover.accessibilityLabel = "Show in list"
         cover.isAccessibilityElement = true
-        for view in [cover, title, subtitle, tech, panel, spectrum, waveform] as [UIView] {
+        for view in [cover, title, subtitle, panel, spectrum, waveform] as [UIView] {
             addSubview(view)
         }
     }
@@ -36,9 +35,8 @@ final class PlayerHeaderView: UIView {
         let width = bounds.width
         cover.frame = CGRect(x: 12, y: 0, width: 64, height: 64)
         let x: CGFloat = 88
-        title.frame = CGRect(x: x, y: 6, width: width - x - 12, height: 20)
-        subtitle.frame = CGRect(x: x, y: 26, width: width - x - 12, height: 17)
-        tech.frame = CGRect(x: x, y: 43, width: width - x - 12, height: 15)
+        title.frame = CGRect(x: x, y: 12, width: width - x - 12, height: 20)
+        subtitle.frame = CGRect(x: x, y: 34, width: width - x - 12, height: 17)
         panel.frame = CGRect(x: 12, y: 74, width: width - 24, height: 48)
         spectrum.frame = panel.frame.insetBy(dx: 7, dy: 5)
         waveform.frame = CGRect(x: 12, y: 130, width: width - 24, height: 40)
@@ -48,26 +46,16 @@ final class PlayerHeaderView: UIView {
         onCoverTap?()
     }
 
-    func show(_ track: Track?, gain: Double) {
+    func show(_ track: Track?) {
         cover.show(track?.coverID)
         title.text = track?.title ?? "Nothing playing"
         subtitle.text = track.map { "\($0.artist) — \($0.album)" } ?? ""
-        guard let track else {
-            tech.text = ""
-            return
-        }
-        var parts = [track.codec, track.resolution, "\(track.bitrate) kbps"]
-        if Settings.shared.replayGain != .off, track.trackGain != nil || track.albumGain != nil {
-            parts.append(String(format: "RG %@%.1f dB", gain < 0 ? "−" : "+", abs(gain)))
-        }
-        tech.text = parts.joined(separator: " · ")
-        waveform.levels = Waveforms.shared.levels(for: track)
+        waveform.levels = track.flatMap { Waveforms.shared.levels(for: $0) }
     }
 
     func apply(_ theme: Theme) {
         title.textColor = theme.text.color()
         subtitle.textColor = theme.secondary
-        tech.textColor = theme.secondary
         cover.backgroundColor = theme.line.color()
         panel.backgroundColor = theme.panel.color()
         panel.layer.borderColor = theme.line.color().cgColor
@@ -88,11 +76,10 @@ final class NowPlayingStrip: UIControl {
     let spectrum = SpectrumView(bands: 14, barWidth: 3)
     private let cover = CoverView(radius: 3)
     private let title = UILabel(font: Fonts.text(14, .semibold))
-    private let detail = UILabel(font: Fonts.mono(10.5))
+    private let detail = UILabel(font: Fonts.text(12.5))
     private let rail = UIView()
     private let fill = UIView()
     private var progress: CGFloat = 0
-    private var artist = ""
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -126,12 +113,10 @@ final class NowPlayingStrip: UIControl {
     func show(_ track: Track?) {
         cover.show(track?.coverID)
         title.text = track?.title ?? "Nothing playing"
-        artist = track?.artist ?? ""
+        detail.text = track?.artist
     }
 
-    func setTime(_ position: Double, _ duration: Double) {
-        let text = artist.isEmpty ? "" : "\(artist) · \(position.clock) / \(duration.clock)"
-        if text != detail.text { detail.text = text }
+    func setProgress(_ position: Double, _ duration: Double) {
         progress = duration > 0 ? CGFloat(min(position / duration, 1)) : 0
         fill.frame.size.width = (bounds.width - 24) * progress
     }

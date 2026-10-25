@@ -135,7 +135,7 @@ final class AlbumCell: UITableViewCell, UIContextMenuInteractionDelegate {
         artist.text = album.artist
         let tracks = album.tracks.count == 1 ? "1 TRACK" : "\(album.tracks.count) TRACKS"
         summary.text = [album.year, tracks, album.duration.clock].filter { !$0.isEmpty }.joined(separator: " · ")
-        format.text = [album.codec, album.resolution, Self.size(album.size)].joined(separator: " · ")
+        format.text = [album.resolution, Self.size(album.size)].joined(separator: " · ")
         cover.show(album.coverID)
         count = album.tracks.count
         while rows.count < count {

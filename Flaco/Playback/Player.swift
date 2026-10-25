@@ -342,6 +342,7 @@ final class Player {
         if isNew {
             queue.didStart(track)
             Waveforms.shared.prepare(track)
+            if let next = queue.next(after: track) { Waveforms.shared.prepare(next, ahead: true) }
         }
     }
 
@@ -406,7 +407,10 @@ final class Player {
             }
             restarted = true
         }
-        if restarted { needsSource = true }
+        if restarted {
+            needsSource = true
+            Log.write("output \(session.currentRoute.outputs.first?.portName ?? "?") at \(Int(rate)) Hz for a \(Int(track.sampleRate)) Hz track")
+        }
         return restarted
     }
 

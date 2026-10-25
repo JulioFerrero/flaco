@@ -192,7 +192,7 @@ final class MainViewController: UIViewController, Themeable {
 
     @objc private func playerChanged() {
         let player = Player.shared
-        header.show(player.current, gain: player.gain)
+        header.show(player.current)
         strip.show(player.current)
         queueChanged()
         updateTheme(animated: true)
@@ -201,7 +201,10 @@ final class MainViewController: UIViewController, Themeable {
 
     @objc private func queueChanged() {
         let player = Player.shared
-        transport.show(player.current, playing: player.state == .playing,
+        let track = player.current
+        let tagged = track.map { $0.trackGain != nil || $0.albumGain != nil } ?? false
+        let gain = Settings.shared.replayGain != .off && tagged ? player.gain : nil
+        transport.show(track, gain: gain, playing: player.state == .playing,
                        shuffle: player.queue.shuffle, repeatMode: player.queue.repeatMode)
     }
 
@@ -212,12 +215,15 @@ final class MainViewController: UIViewController, Themeable {
     @objc private func settingsChanged() {
         applySettings()
         updateTheme(animated: true)
-        header.show(Player.shared.current, gain: Player.shared.gain)
+        header.show(Player.shared.current)
+        queueChanged()
     }
 
     @objc private func waveformReady(_ note: Notification) {
         guard let path = note.object as? String, let track = Player.shared.current, track.path == path else { return }
-        header.waveform.levels = Waveforms.shared.levels(for: track)
+        UIView.transition(with: header.waveform, duration: 0.25, options: .transitionCrossDissolve) {
+            self.header.waveform.levels = Waveforms.shared.levels(for: track)
+        }
     }
 
     @objc private func fillQuery(_ note: Notification) {
@@ -263,7 +269,7 @@ final class MainViewController: UIViewController, Themeable {
         } else {
             strip.spectrum.update(bands, now: now, dt: dt)
         }
-        strip.setTime(position, duration)
+        strip.setProgress(position, duration)
         if !scrubbing { transport.setTime(position, duration) }
         if player.state != .playing, header.spectrum.isSettled, strip.spectrum.isSettled {
             link.isPaused = true

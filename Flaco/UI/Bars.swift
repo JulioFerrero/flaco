@@ -163,8 +163,10 @@ final class TransportBar: UIView {
         time.frame = CGRect(x: width - 132, y: 54, width: 120, height: 22)
     }
 
-    func show(_ track: Track?, playing: Bool, shuffle: Bool, repeatMode: RepeatMode) {
-        status.text = track?.status ?? ""
+    func show(_ track: Track?, gain: Double?, playing: Bool, shuffle: Bool, repeatMode: RepeatMode) {
+        var text = track?.status ?? ""
+        if let gain { text += String(format: " | RG %@%.1f dB", gain < 0 ? "−" : "+", abs(gain)) }
+        status.text = text
         isPlaying = playing
         self.shuffle = shuffle
         self.repeatMode = repeatMode
