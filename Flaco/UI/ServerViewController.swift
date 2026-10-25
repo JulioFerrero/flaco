@@ -9,6 +9,7 @@ final class ServerViewController: CardPage, UITextFieldDelegate {
     private let disconnect = SettingsRow(.action("Disconnect"))
     private let note = UILabel()
     private let disconnectNote = UILabel()
+    private let eye = UIButton(type: .system)
     private var checking = false
 
     init() {
@@ -27,8 +28,16 @@ final class ServerViewController: CardPage, UITextFieldDelegate {
         address.field.text = server.address.replacingOccurrences(of: "https://", with: "")
         user.field.placeholder = "Name"
         user.field.text = server.user
+        user.field.textContentType = .username
         password.field.isSecureTextEntry = true
+        password.field.textContentType = .password
         password.field.placeholder = server.isConfigured ? "Saved" : "Required"
+        password.field.clearButtonMode = .never
+        eye.frame = CGRect(x: 0, y: 0, width: 40, height: 44)
+        eye.addAction(UIAction { [weak self] _ in self?.togglePassword() }, for: .touchUpInside)
+        password.field.rightView = eye
+        password.field.rightViewMode = .always
+        showEye()
         for (row, key) in [(address, UIReturnKeyType.next), (user, .next), (password, .go)] {
             row.field.returnKeyType = key
             row.field.delegate = self
@@ -45,6 +54,30 @@ final class ServerViewController: CardPage, UITextFieldDelegate {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if !Server.shared.isConfigured { address.field.becomeFirstResponder() }
+    }
+
+    override func apply(_ theme: Theme) {
+        super.apply(theme)
+        eye.tintColor = theme.secondary
+    }
+
+    private func togglePassword() {
+        password.field.isSecureTextEntry.toggle()
+        showEye()
+    }
+
+    private func showEye() {
+        let hidden = password.field.isSecureTextEntry
+        eye.setImage(Icon.image(hidden ? "eye" : "eye.slash", 15), for: .normal)
+        eye.accessibilityLabel = hidden ? "Show password" : "Hide password"
+    }
+
+    /// A hidden field empties itself when typing resumes after it was shown, so its edits are applied by hand.
+    func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+        guard textField === password.field, textField.isSecureTextEntry,
+              let text = textField.text, let range = Range(range, in: text) else { return true }
+        textField.text = text.replacingCharacters(in: range, with: string)
+        return false
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
