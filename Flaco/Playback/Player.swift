@@ -46,6 +46,8 @@ final class Player {
     private var resumeAfterInterruption = false
     private var lastSaved = Date.distantPast
     private var timer: Timer?
+    /// Outputs that wouldn't run at a rate, as "port type|rate", so they aren't asked again.
+    private var refusedRates: Set<String> = []
 
     /// Where a track starts on the node's clock.
     private struct Segment {
@@ -371,24 +373,41 @@ final class Player {
     }
 
     /// Activates the session at the track's rate and matches the engine to what the output gives.
-    /// True when the engine had to change rate.
+    /// True when what was decoded can't be used any more.
     private func prepareOutput(for track: Track) -> Bool {
         let session = AVAudioSession.sharedInstance()
+        let desired = Self.outputRate(for: track)
         try? session.setCategory(.playback, mode: .default)
-        try? session.setPreferredSampleRate(Self.outputRate(for: track))
+        try? session.setPreferredSampleRate(desired)
         try? session.setActive(true)
-        let rate = session.sampleRate
-        guard rate > 0, rate != format.sampleRate else { return false }
-        decoder.sync {
-            resetDecoder()
-            if engine.isRunning { engine.stop() }
-            format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
-            engine.connect(node, to: engine.mainMixerNode, format: format)
-            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
-            spectrum.configure(sampleRate: rate)
+        var restarted = false
+        let route = (session.currentRoute.outputs.first?.portType.rawValue ?? "") + "|\(desired)"
+        if session.sampleRate != desired, !refusedRates.contains(route) {
+            // Some outputs change rate only when the session starts again.
+            decoder.sync {
+                resetDecoder()
+                if engine.isRunning { engine.stop() }
+            }
+            try? session.setActive(false)
+            try? session.setPreferredSampleRate(desired)
+            try? session.setActive(true)
+            if session.sampleRate != desired { refusedRates.insert(route) }
+            restarted = true
         }
-        needsSource = true
-        return true
+        let rate = session.sampleRate
+        if rate > 0, rate != format.sampleRate {
+            decoder.sync {
+                resetDecoder()
+                if engine.isRunning { engine.stop() }
+                format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2)!
+                engine.connect(node, to: engine.mainMixerNode, format: format)
+                engine.connect(engine.mainMixerNode, to: engine.outputNode, format: format)
+                spectrum.configure(sampleRate: rate)
+            }
+            restarted = true
+        }
+        if restarted { needsSource = true }
+        return restarted
     }
 
     private func startEngine() {

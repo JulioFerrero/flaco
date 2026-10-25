@@ -4,6 +4,8 @@ import UIKit
 final class SettingsViewController: UIViewController, Themeable {
     private let scroll = UIScrollView()
     private let glow = GlowView()
+    private let topBar = UIView()
+    private let topLine = UIView()
     private let back = Icon.button("chevron.left", 18, "Back")
     private let heading = UILabel(font: Fonts.text(17, .semibold))
     private var cards: [SettingsCard] = []
@@ -31,8 +33,12 @@ final class SettingsViewController: UIViewController, Themeable {
         view.addSubview(scroll)
         back.addAction(UIAction { [weak self] _ in self?.navigationController?.popViewController(animated: true) }, for: .touchUpInside)
         heading.text = "Settings"
-        scroll.addSubview(back)
-        scroll.addSubview(heading)
+        // Fixed above the scrolling cards, so they pass under it rather than under the status bar.
+        view.addSubview(topBar)
+        topBar.addSubview(back)
+        topBar.addSubview(heading)
+        topBar.addSubview(topLine)
+        scroll.delegate = self
 
         section("OUTPUT", [device, rate], note: outputNote)
         section("PLAYBACK", [replayGain, clipping, resume])
@@ -83,11 +89,13 @@ final class SettingsViewController: UIViewController, Themeable {
         super.viewDidLayoutSubviews()
         let width = view.bounds.width
         glow.frame = CGRect(x: 0, y: 0, width: width, height: 300)
-        scroll.frame = view.bounds
         let top = view.safeAreaInsets.top + 4
+        topBar.frame = CGRect(x: 0, y: 0, width: width, height: top + 44)
         back.frame = CGRect(x: 4, y: top, width: 44, height: 44)
         heading.frame = CGRect(x: 48, y: top, width: 200, height: 44)
-        var y = top + 44
+        topLine.frame = CGRect(x: 0, y: topBar.bounds.height - UIView.hairline, width: width, height: UIView.hairline)
+        scroll.frame = CGRect(x: 0, y: topBar.frame.maxY, width: width, height: view.bounds.height - topBar.frame.maxY)
+        var y: CGFloat = -8
         for (i, card) in cards.enumerated() {
             y += 20
             labels[i].frame = CGRect(x: 16, y: y, width: width - 32, height: 14)
@@ -109,7 +117,7 @@ final class SettingsViewController: UIViewController, Themeable {
         let player = Player.shared
         device.value = player.outputName
         rate.value = "\(Track.kilohertz(player.outputSampleRate)) kHz"
-        outputNote.text = "Files above \(Track.kilohertz(player.outputSampleRate)) kHz are resampled to the iPhone's output."
+        outputNote.text = "Files play at their own rate where the output allows it, and are resampled otherwise."
         replayGain.selected = ReplayGainMode.allCases.firstIndex(of: settings.replayGain) ?? 0
         clipping.isOn = settings.preventClipping
         resume.isOn = settings.resume
@@ -124,11 +132,20 @@ final class SettingsViewController: UIViewController, Themeable {
         self.theme = theme
         view.backgroundColor = theme.background.color()
         glow.backgroundColor = theme.glow.color()
+        topBar.backgroundColor = theme.glow.mix(theme.background, 0.12).color()
+        topLine.backgroundColor = theme.line.color()
         back.tintColor = theme.text.color()
         heading.textColor = theme.text.color()
         for label in labels { label.textColor = theme.secondary }
         for note in notes { note.textColor = theme.secondary }
         for card in cards { card.apply(theme) }
+    }
+}
+
+extension SettingsViewController: UIScrollViewDelegate {
+    /// The bar's line shows once something has scrolled under it.
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        topLine.alpha = scrollView.contentOffset.y > 1 ? 1 : 0
     }
 }
 

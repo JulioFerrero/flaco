@@ -99,25 +99,27 @@ final class AlbumCell: UITableViewCell, UIContextMenuInteractionDelegate {
 
     var onPlay: ((Track) -> Void)?
 
-    private let title = UILabel(font: Fonts.text(12.5, .semibold))
-    private let artist = UILabel(font: Fonts.text(12.5))
-    private let meta = UILabel(font: Fonts.mono(10.5), alignment: .right)
-    private let line = UIView()
     private let cover = CoverView(radius: 3)
-    private let total = UILabel(font: Fonts.mono(10))
+    private let title = UILabel(font: Fonts.text(15, .semibold))
+    private let artist = UILabel(font: Fonts.text(13))
+    private let summary = UILabel(font: Fonts.mono(10.5))
+    private let format = UILabel(font: Fonts.mono(10.5))
+    private let line = UIView()
     private var rows: [TrackRow] = []
     private var count = 0
-    private var top: CGFloat = 4
+    private var top: CGFloat = 8
 
+    /// The cover with the album's details beside it, then its tracks across the full width.
     static func height(for album: Album, first: Bool) -> CGFloat {
-        (first ? 4 : 16) + 34 + 8 + max(88 + 6 + 14, CGFloat(album.tracks.count) * 44)
+        (first ? 8 : 20) + 88 + 8 + CGFloat(album.tracks.count) * 44
     }
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         backgroundColor = .clear
         selectionStyle = .none
-        for view in [title, artist, meta, line, cover, total] as [UIView] {
+        title.numberOfLines = 2
+        for view in [line, cover, title, artist, summary, format] as [UIView] {
             contentView.addSubview(view)
         }
     }
@@ -127,11 +129,13 @@ final class AlbumCell: UITableViewCell, UIContextMenuInteractionDelegate {
     }
 
     func configure(_ album: Album, first: Bool, current: String?, theme: Theme) {
-        top = first ? 4 : 16
+        top = first ? 8 : 20
+        line.isHidden = first
         title.text = album.title
         artist.text = album.artist
-        meta.text = [album.year, album.resolution].filter { !$0.isEmpty }.joined(separator: " · ")
-        total.text = album.duration.clock
+        let tracks = album.tracks.count == 1 ? "1 TRACK" : "\(album.tracks.count) TRACKS"
+        summary.text = [album.year, tracks, album.duration.clock].filter { !$0.isEmpty }.joined(separator: " · ")
+        format.text = [album.codec, album.resolution, Self.size(album.size)].joined(separator: " · ")
         cover.show(album.coverID)
         count = album.tracks.count
         while rows.count < count {
@@ -150,6 +154,11 @@ final class AlbumCell: UITableViewCell, UIContextMenuInteractionDelegate {
         setNeedsLayout()
     }
 
+    private static func size(_ bytes: Int64) -> String {
+        let megabytes = Double(bytes) / 1_000_000
+        return megabytes >= 1000 ? String(format: "%.1f GB", megabytes / 1000) : String(format: "%.0f MB", megabytes)
+    }
+
     func setCurrent(_ path: String?) {
         for row in rows.prefix(count) {
             row.isCurrent = row.track?.path == path
@@ -159,8 +168,8 @@ final class AlbumCell: UITableViewCell, UIContextMenuInteractionDelegate {
     func apply(_ theme: Theme) {
         title.textColor = theme.text.color()
         artist.textColor = theme.secondary
-        meta.textColor = theme.secondary
-        total.textColor = theme.secondary
+        summary.textColor = theme.secondary
+        format.textColor = theme.secondary
         line.backgroundColor = theme.line.color()
         cover.backgroundColor = theme.line.color()
         for row in rows { row.apply(theme) }
@@ -169,16 +178,16 @@ final class AlbumCell: UITableViewCell, UIContextMenuInteractionDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         let width = contentView.bounds.width
-        let metaWidth = ceil(meta.intrinsicContentSize.width)
-        meta.frame = CGRect(x: width - 12 - metaWidth, y: top, width: metaWidth, height: 34)
-        let titleWidth = min(ceil(title.intrinsicContentSize.width), meta.frame.minX - 20 - 12)
-        title.frame = CGRect(x: 12, y: top, width: max(titleWidth, 0), height: 34)
-        artist.frame = CGRect(x: title.frame.maxX + 8, y: top, width: max(meta.frame.minX - 8 - title.frame.maxX - 8, 0), height: 34)
-        line.frame = CGRect(x: 12, y: top + 34 - UIView.hairline, width: width - 24, height: UIView.hairline)
-        cover.frame = CGRect(x: 12, y: top + 42, width: 88, height: 88)
-        total.frame = CGRect(x: 12, y: top + 136, width: 88, height: 14)
+        line.frame = CGRect(x: 12, y: 0, width: width - 24, height: UIView.hairline)
+        cover.frame = CGRect(x: 12, y: top, width: 88, height: 88)
+        let x: CGFloat = 112, textWidth = width - x - 12
+        let titleHeight = min(ceil(title.sizeThatFits(CGSize(width: textWidth, height: 100)).height), 38)
+        title.frame = CGRect(x: x, y: top + 1, width: textWidth, height: titleHeight)
+        artist.frame = CGRect(x: x, y: title.frame.maxY + 1, width: textWidth, height: 17)
+        format.frame = CGRect(x: x, y: top + 88 - 15, width: textWidth, height: 15)
+        summary.frame = CGRect(x: x, y: format.frame.minY - 16, width: textWidth, height: 15)
         for (i, row) in rows.prefix(count).enumerated() {
-            row.frame = CGRect(x: 112, y: top + 42 + CGFloat(i) * 44, width: width - 112 - 12, height: 44)
+            row.frame = CGRect(x: 8, y: top + 96 + CGFloat(i) * 44, width: width - 16, height: 44)
         }
     }
 

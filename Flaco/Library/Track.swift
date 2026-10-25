@@ -66,6 +66,14 @@ struct Album {
     var coverID: String { Library.hash(key) }
     var duration: Double { tracks.reduce(0) { $0 + $1.duration } }
     var isHiRes: Bool { tracks.contains { $0.isHiRes } }
+    var size: Int64 { tracks.reduce(0) { $0 + $1.size } }
+
+    /// "FLAC", or "FLAC/MP3" for a mix.
+    var codec: String {
+        var seen: [String] = []
+        for track in tracks where !seen.contains(track.codec) { seen.append(track.codec) }
+        return seen.joined(separator: "/")
+    }
 
     /// The finest resolution among its tracks.
     var resolution: String {
