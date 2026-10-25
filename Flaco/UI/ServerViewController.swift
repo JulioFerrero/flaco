@@ -113,7 +113,12 @@ final class ServerViewController: CardPage, UITextFieldDelegate {
                 view.setNeedsLayout()
                 Sync.shared.start()
                 try? await Task.sleep(nanoseconds: 700_000_000)
-                navigationController?.popViewController(animated: true)
+                // A new server asks what to download before anything comes down.
+                if Sync.shared.selection.mode == .undecided {
+                    navigationController?.pushViewController(ChooseViewController(), animated: true)
+                } else {
+                    navigationController?.popViewController(animated: true)
+                }
             } catch {
                 connect.value = ""
                 note.text = error.localizedDescription

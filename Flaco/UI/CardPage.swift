@@ -14,6 +14,9 @@ class CardPage: UIViewController, Themeable {
     private var labels: [UILabel] = []
     private var notes: [UILabel] = []
 
+    /// Where the space under the top bar starts, for pages that lay out their own content.
+    var contentTop: CGFloat { scroll.frame.minY }
+
     init(title: String) {
         super.init(nibName: nil, bundle: nil)
         heading.text = title

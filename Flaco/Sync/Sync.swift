@@ -58,6 +58,14 @@ final class Sync: NSObject {
     private(set) var lastSynced: Date?
     var backgroundCompletion: (() -> Void)?
 
+    /// What to keep on the phone. Changing it takes effect on the next sync.
+    var selection = Selection() {
+        didSet {
+            if let data = try? JSONEncoder().encode(selection) { defaults.set(data, forKey: "syncSelection") }
+            notify()
+        }
+    }
+
     var bytesDone: Int64 { bytesFinished + written.values.reduce(0, +) }
     var serverBytes: Int64 { catalog.reduce(0) { $0 + $1.size } }
 
@@ -102,6 +110,12 @@ final class Sync: NSObject {
             catalog = saved
         }
         lastSynced = defaults.object(forKey: "syncLast") as? Date
+        if let data = defaults.data(forKey: "syncSelection"), let saved = try? JSONDecoder().decode(Selection.self, from: data) {
+            selection = saved
+        } else if Server.shared.isConfigured {
+            // Connected before there was a choice: it was everything.
+            selection.mode = .everything
+        }
     }
 
     func status(of song: Server.Song) -> Status {
@@ -133,13 +147,15 @@ final class Sync: NSObject {
 
     /// On opening Flaco, unless a check ran in the last two minutes.
     func startIfDue() {
-        guard Settings.shared.autoSync else { return }
+        guard Settings.shared.autoSync, phase != .downloading else { return }
         if let lastSynced, Date().timeIntervalSince(lastSynced) < 120 { return }
         start()
     }
 
+    /// Checks the server and brings the phone in line with it and the selection. While downloading, this
+    /// re-plans: downloads no longer wanted stop, new ones join.
     func start() {
-        guard Server.shared.isConfigured, phase != .checking, phase != .downloading else { return }
+        guard Server.shared.isConfigured, phase != .checking else { return }
         reconnect()
         phase = .checking
         notify()
@@ -147,7 +163,7 @@ final class Sync: NSObject {
             do {
                 let listing = try await Server.shared.listing()
                 let running = await session.allTasks.filter { $0.state == .running }
-                plan(listing, running: Set(running.compactMap(Job.init).map(\.id)))
+                plan(listing, running: running)
             } catch {
                 phase = .failed(error.localizedDescription)
                 notify()
@@ -165,6 +181,7 @@ final class Sync: NSObject {
         failed = []
         lastSynced = nil
         phase = .idle
+        selection = Selection()
         saveManifest()
         try? FileManager.default.removeItem(at: catalogURL)
         defaults.removeObject(forKey: "syncLast")
@@ -174,24 +191,27 @@ final class Sync: NSObject {
 
     // MARK: Planning
 
-    private func plan(_ listing: Server.Listing, running: Set<String>) {
+    private func plan(_ listing: Server.Listing, running tasks: [URLSessionTask]) {
         let songs = listing.songs.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         catalog = songs
         if let data = try? JSONEncoder().encode(songs) { try? data.write(to: catalogURL, options: .atomic) }
 
-        // A server that lists nothing, or is mid-scan, may be wrong about what's gone.
+        // A server that lists nothing, or is mid-scan, may be wrong about what's gone. Unticked songs go
+        // regardless, once something has been chosen.
         var removed = 0
-        if !songs.isEmpty, !listing.scanning {
-            let remote = Dictionary(songs.map { ($0.id, $0.path) }, uniquingKeysWith: { a, _ in a })
-            for (id, entry) in manifest where remote[id] != entry.path {
-                remove(entry.path)
-                manifest[id] = nil
-                removed += 1
-            }
+        let trusted = !songs.isEmpty && !listing.scanning
+        let remote = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for (id, entry) in manifest {
+            let gone = trusted && remote[id]?.path != entry.path
+            let unticked = selection.mode != .undecided && remote[id].map { !selection.wants($0) } == true
+            guard gone || unticked else { continue }
+            remove(entry.path)
+            manifest[id] = nil
+            removed += 1
         }
 
         var wanted: [Server.Song] = []
-        for song in songs {
+        for song in songs where selection.wants(song) {
             if Self.size(of: Library.documents.appendingPathComponent(song.path)) == song.size {
                 // Already here, from an earlier sync or copied by hand.
                 manifest[song.id] = Entry(path: song.path, size: song.size)
@@ -202,7 +222,18 @@ final class Sync: NSObject {
         }
         saveManifest()
         failed = []
-        if removed > 0 { scanSoon() }
+        if removed > 0 { scanSoon(force: true) }
+
+        let wantedIDs = Set(wanted.map(\.id))
+        var running: Set<String> = []
+        for task in tasks {
+            guard let job = Job(task) else { continue }
+            if wantedIDs.contains(job.id) {
+                running.insert(job.id)
+            } else {
+                task.cancel()
+            }
+        }
 
         let needed = wanted.filter { !running.contains($0.id) }.reduce(0) { $0 + $1.size }
         let free = Self.freeSpace

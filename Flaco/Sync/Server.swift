@@ -16,6 +16,11 @@ final class Server {
         let title: String
         let artist: String
         let album: String
+        /// Whose album it is, which keeps compilations together.
+        let albumArtist: String
+        let year: Int
+        /// The server's id for the album's cover.
+        let coverArt: String?
     }
 
     /// What the setup screen asks for.
@@ -118,13 +123,19 @@ final class Server {
             songs.append(Song(
                 id: id, path: path, size: size, albumID: item["albumId"] as? String ?? "",
                 title: item["title"] as? String ?? (path as NSString).lastPathComponent,
-                artist: item["artist"] as? String ?? "", album: item["album"] as? String ?? ""))
+                artist: item["artist"] as? String ?? "", album: item["album"] as? String ?? "",
+                albumArtist: item["displayAlbumArtist"] as? String ?? item["artist"] as? String ?? "",
+                year: item["year"] as? Int ?? 0, coverArt: item["coverArt"] as? String))
         }
         return Listing(songs: songs, scanning: scanning)
     }
 
     func downloadURL(_ id: String) -> URL? {
         url("download", ["id": id])
+    }
+
+    func coverURL(_ id: String, size: Int) -> URL? {
+        url("getCoverArt", ["id": id, "size": String(size)])
     }
 
     /// Navidrome reports where it keeps a file: its library folder, then the way the music came in (the Finder

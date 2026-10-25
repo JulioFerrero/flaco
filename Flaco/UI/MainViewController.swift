@@ -168,7 +168,9 @@ final class MainViewController: UIViewController, Themeable {
             self?.navigationController?.pushViewController(SettingsViewController(), animated: true)
         }, for: .touchUpInside)
         welcome.serverCard.addAction(UIAction { [weak self] _ in
-            if Server.shared.isConfigured {
+            if Server.shared.isConfigured, Sync.shared.selection.mode == .undecided {
+                self?.navigationController?.pushViewController(ChooseViewController(), animated: true)
+            } else if Server.shared.isConfigured {
                 Sync.shared.start()
             } else {
                 self?.navigationController?.pushViewController(ServerViewController(), animated: true)

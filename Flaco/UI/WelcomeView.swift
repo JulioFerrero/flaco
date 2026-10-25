@@ -52,6 +52,8 @@ final class WelcomeView: UIView {
             serverCard.title.text = server.host
             if case .failed(let message) = sync.phase {
                 serverCard.subtitle.text = message.uppercased()
+            } else if sync.selection.mode == .undecided {
+                serverCard.subtitle.text = "CHOOSE WHAT TO DOWNLOAD"
             } else {
                 serverCard.subtitle.text = sync.catalog.isEmpty ? "NO MUSIC ON THE SERVER YET" : "TAP TO SYNC"
             }

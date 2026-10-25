@@ -4,6 +4,7 @@ import UIKit
 final class SettingsViewController: CardPage {
 
     private let server = SettingsRow(.value("Server"))
+    private let download = SettingsRow(.value("Download"))
     private let syncNow = SettingsRow(.action("Sync now"))
     private let onServer = SettingsRow(.value("On server"))
     private let onPhone = SettingsRow(.value("On this phone"))
@@ -32,7 +33,7 @@ final class SettingsViewController: CardPage {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        section("SERVER", [server, syncNow, onServer, onPhone, autoSync, cellular], note: syncNote)
+        section("SERVER", [server, download, syncNow, onServer, onPhone, autoSync, cellular], note: syncNote)
         section("OUTPUT", [device, rate], note: outputNote)
         section("PLAYBACK", [replayGain, clipping, resume])
         section("LOOK", [colors, spectrum, waveform])
@@ -43,6 +44,10 @@ final class SettingsViewController: CardPage {
         let settings = Settings.shared
         server.onAction = { [weak self] in self?.navigationController?.pushViewController(ServerViewController(), animated: true) }
         onServer.onAction = { [weak self] in self?.present(DownloadsViewController.sheet(), animated: true) }
+        download.onAction = { [weak self] in
+            guard Server.shared.isConfigured else { return }
+            self?.navigationController?.pushViewController(ChooseViewController(), animated: true)
+        }
         syncNow.onAction = { Sync.shared.start() }
         autoSync.onToggle = { settings.autoSync = $0 }
         cellular.onToggle = { settings.cellular = $0 }
@@ -86,6 +91,14 @@ final class SettingsViewController: CardPage {
         let sync = Sync.shared
         let configured = Server.shared.isConfigured
         server.value = configured ? Server.shared.host : "SET UP"
+        switch sync.selection.mode {
+        case _ where !configured: download.value = "—"
+        case .undecided: download.value = "CHOOSE"
+        case .everything: download.value = "EVERYTHING"
+        case .chosen:
+            let wanted = sync.catalog.filter(sync.selection.wants)
+            download.value = "\(wanted.count) SONGS · \(Sync.bytes(wanted.reduce(0) { $0 + $1.size }))"
+        }
         syncNow.isEnabled = configured && sync.phase != .checking && sync.phase != .downloading
         syncNow.bar = nil
         switch sync.phase {
