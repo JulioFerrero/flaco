@@ -1,7 +1,8 @@
 import UIKit
 
 /// The one window, foobar-style: the player on top, the playlist, library or search in the middle, and the
-/// transport bar at the bottom. Everything takes its colors from the playing cover.
+/// transport bar at the bottom. Everything takes its colors from the playing cover. With no music yet, a
+/// welcome stands in for all of it.
 final class MainViewController: UIViewController, Themeable {
     private enum Mode {
         case playlist, library, search
@@ -17,6 +18,7 @@ final class MainViewController: UIViewController, Themeable {
     private let searchBar = SearchBar()
     private let content = UIView()
     private let transport = TransportBar()
+    private let welcome = WelcomeView()
 
     private let albumList = AlbumListViewController()
     private let library = LibraryViewController()
@@ -30,7 +32,7 @@ final class MainViewController: UIViewController, Themeable {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        for view in [glow, header, strip, tabs, searchBar, content, transport] as [UIView] {
+        for view in [glow, header, strip, tabs, searchBar, content, transport, welcome] as [UIView] {
             self.view.addSubview(view)
         }
         for child in [albumList, library, search] {
@@ -78,6 +80,17 @@ final class MainViewController: UIViewController, Themeable {
         let transportHeight = TransportBar.height + view.safeAreaInsets.bottom
         transport.frame = CGRect(x: 0, y: view.bounds.height - transportHeight, width: width, height: transportHeight)
         content.frame = CGRect(x: 0, y: tabs.frame.maxY, width: width, height: transport.frame.minY - tabs.frame.maxY)
+
+        // With no music the welcome stands in for the player. Faded-out views take no touches.
+        let empty = Library.shared.tracks.isEmpty
+        welcome.frame = view.bounds
+        welcome.alpha = empty ? 1 : 0
+        if empty {
+            for player in [header, strip, tabs, searchBar, content, transport] as [UIView] { player.alpha = 0 }
+        } else {
+            content.alpha = 1
+            transport.alpha = 1
+        }
     }
 
     private func show(_ mode: Mode, animated: Bool = true) {
@@ -151,14 +164,21 @@ final class MainViewController: UIViewController, Themeable {
         }, for: .touchUpInside)
         transport.queueButton.addAction(UIAction { [weak self] _ in self?.presentQueue() }, for: .touchUpInside)
 
-        albumList.onImport = { [weak self] in
+        welcome.settingsButton.addAction(UIAction { [weak self] _ in
+            self?.navigationController?.pushViewController(SettingsViewController(), animated: true)
+        }, for: .touchUpInside)
+        welcome.serverCard.addAction(UIAction { [weak self] _ in
+            if Server.shared.isConfigured {
+                Sync.shared.start()
+            } else {
+                self?.navigationController?.pushViewController(ServerViewController(), animated: true)
+            }
+        }, for: .touchUpInside)
+        welcome.filesCard.addAction(UIAction { [weak self] _ in
             guard let self else { return }
             Importer.present(from: self)
-        }
-        albumList.onConnect = { [weak self] in
-            self?.navigationController?.pushViewController(ServerViewController(), animated: true)
-        }
-        albumList.onShowDownloads = { [weak self] in self?.presentDownloads() }
+        }, for: .touchUpInside)
+        welcome.songsButton.addAction(UIAction { [weak self] _ in self?.presentDownloads() }, for: .touchUpInside)
         tabs.syncButton.addAction(UIAction { [weak self] _ in self?.presentDownloads() }, for: .touchUpInside)
         library.onShowAlbum = { [weak self] album in self?.showAlbum(album) }
         search.onShowAlbum = { [weak self] album in self?.showAlbum(album) }
@@ -191,6 +211,7 @@ final class MainViewController: UIViewController, Themeable {
 
     @objc private func syncChanged() {
         let sync = Sync.shared
+        if welcome.alpha > 0 { welcome.refresh() }
         switch sync.phase {
         case .checking: tabs.showSync("")
         case .downloading: tabs.showSync(sync.bytesTotal > 0 ? "\(Int(Double(sync.bytesDone) * 100 / Double(sync.bytesTotal)))%" : "")
@@ -230,6 +251,7 @@ final class MainViewController: UIViewController, Themeable {
     }
 
     @objc private func libraryChanged() {
+        UIView.animate(withDuration: 0.35, delay: 0, options: [.beginFromCurrentState]) { self.layout() }
         updateTheme(animated: true)
         Waveforms.shared.prepareLibrary()
     }
@@ -274,6 +296,7 @@ final class MainViewController: UIViewController, Themeable {
         tabs.apply(theme)
         searchBar.apply(theme)
         transport.apply(theme)
+        welcome.apply(theme)
     }
 
     /// Spectrum, seekbar and clock, every frame while playing; idle otherwise.

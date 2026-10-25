@@ -3,12 +3,7 @@ import UIKit
 /// The whole library as one playlist, album by album: each cover on the left with its tracks beside it.
 /// Playing a track carries on into the albums after it.
 final class AlbumListViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, Themeable {
-    var onImport: (() -> Void)?
-    var onConnect: (() -> Void)?
-    var onShowDownloads: (() -> Void)?
-
     private let table = UITableView(frame: .zero, style: .plain)
-    private let empty = EmptyLibraryView()
     private var albums: [Album] = []
     private var theme = Theme.neutral
 
@@ -26,19 +21,9 @@ final class AlbumListViewController: UIViewController, UITableViewDataSource, UI
         table.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(table)
 
-        empty.frame = view.bounds
-        empty.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        empty.button.addTarget(self, action: #selector(importTapped), for: .touchUpInside)
-        empty.secondButton.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            Server.shared.isConfigured ? self.onShowDownloads?() : self.onConnect?()
-        }, for: .touchUpInside)
-        view.addSubview(empty)
-
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
         center.addObserver(self, selector: #selector(refreshCurrent), name: Player.didChange, object: nil)
-        center.addObserver(self, selector: #selector(refreshEmpty), name: Sync.didChange, object: nil)
         ThemeCenter.shared.register(self)
         reload()
     }
@@ -46,21 +31,6 @@ final class AlbumListViewController: UIViewController, UITableViewDataSource, UI
     @objc private func reload() {
         albums = Library.shared.albums
         table.reloadData()
-        empty.isHidden = !albums.isEmpty
-        refreshEmpty()
-    }
-
-    @objc private func refreshEmpty() {
-        guard !empty.isHidden else { return }
-        let sync = Sync.shared
-        switch sync.phase {
-        case .checking:
-            empty.show(scanning: Library.shared.isScanning, sync: "Checking the server…")
-        case .downloading:
-            empty.show(scanning: false, sync: "\(Sync.bytes(sync.bytesDone)) of \(Sync.bytes(sync.bytesTotal)) · \(Sync.rate(sync.speed))")
-        default:
-            empty.show(scanning: Library.shared.isScanning, sync: nil)
-        }
     }
 
     @objc private func refreshCurrent() {
@@ -70,16 +40,11 @@ final class AlbumListViewController: UIViewController, UITableViewDataSource, UI
         }
     }
 
-    @objc private func importTapped() {
-        onImport?()
-    }
-
     func apply(_ theme: Theme) {
         self.theme = theme
         for case let cell as AlbumCell in table.visibleCells {
             cell.apply(theme)
         }
-        empty.apply(theme)
     }
 
     func scroll(toAlbum key: String) {
@@ -292,91 +257,5 @@ final class TrackRow: UIControl {
         mark.frame = CGRect(x: 14, y: 0, width: 12, height: 44)
         duration.frame = CGRect(x: width - 8 - 48, y: 0, width: 48, height: 44)
         title.frame = CGRect(x: 36, y: 0, width: duration.frame.minX - 8 - 36, height: 44)
-    }
-}
-
-/// What the list shows before any music is in.
-final class EmptyLibraryView: UIView {
-    let button = UIButton(type: .custom)
-    /// Connect a server, or while downloading, see each song.
-    let secondButton = UIButton(type: .system)
-    /// While a sync fills the empty library, its progress replaces the instructions.
-    func show(scanning: Bool, sync: String?) {
-        title.text = sync == nil ? "Add your music" : "Downloading your music"
-        body.text = sync ?? (scanning ? "Looking for music…" : EmptyLibraryView.instructions)
-        formats.isHidden = sync != nil
-        button.isHidden = sync != nil
-        let second = sync != nil ? "Show downloads" : Server.shared.isConfigured ? nil : "Connect a server"
-        secondButton.isHidden = second == nil
-        if secondButton.title(for: .normal) != second { secondButton.setTitle(second, for: .normal) }
-        setNeedsLayout()
-    }
-
-    private static let instructions = "Drop files on Flaco in Finder, or choose them from Files."
-    private let ghosts = (0..<4).map { _ in UIView() }
-    private let title = UILabel(font: Fonts.text(20, .semibold), alignment: .center)
-    private let body = UILabel(font: Fonts.text(15), alignment: .center)
-    private let formats = UILabel(font: Fonts.mono(11), alignment: .center)
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        title.text = "Add your music"
-        body.text = Self.instructions
-        body.numberOfLines = 0
-        formats.text = "FLAC · ALAC · WAV · AIFF · MP3 · AAC"
-        button.setTitle("Choose Files", for: .normal)
-        button.titleLabel?.font = Fonts.text(15, .semibold)
-        button.layer.cornerRadius = 10
-        for ghost in ghosts {
-            ghost.layer.cornerRadius = 6
-            ghost.layer.borderWidth = 1
-            addSubview(ghost)
-        }
-        secondButton.titleLabel?.font = Fonts.text(15)
-        secondButton.isHidden = true
-        for view in [title, body, formats, button, secondButton] as [UIView] {
-            addSubview(view)
-        }
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let side: CGFloat = 64
-        let gridWidth = side * 2 + 12
-        let left = (bounds.width - gridWidth) / 2
-        var y: CGFloat = 32
-        for (i, ghost) in ghosts.enumerated() {
-            ghost.frame = CGRect(x: left + CGFloat(i % 2) * (side + 12), y: y + CGFloat(i / 2) * (side + 12), width: side, height: side)
-        }
-        y += gridWidth + 24
-        title.frame = CGRect(x: 24, y: y, width: bounds.width - 48, height: 26)
-        y += 32
-        let bodyHeight = ceil(body.sizeThatFits(CGSize(width: 290, height: 200)).height)
-        body.frame = CGRect(x: (bounds.width - 290) / 2, y: y, width: 290, height: bodyHeight)
-        y += bodyHeight + 12
-        formats.frame = CGRect(x: 24, y: y, width: bounds.width - 48, height: 14)
-        y += 38
-        let buttonWidth = ceil(button.titleLabel?.intrinsicContentSize.width ?? 0) + 44
-        button.frame = CGRect(x: (bounds.width - buttonWidth) / 2, y: y, width: buttonWidth, height: 44)
-        // Under the instructions while downloading, else under the button.
-        if !button.isHidden { y += 52 }
-        secondButton.frame = CGRect(x: 24, y: y, width: bounds.width - 48, height: 44)
-    }
-
-    func apply(_ theme: Theme) {
-        title.textColor = theme.text.color()
-        body.textColor = theme.secondary
-        formats.textColor = theme.secondary
-        button.backgroundColor = theme.text.color()
-        button.setTitleColor(theme.background.color(), for: .normal)
-        secondButton.tintColor = theme.accent.color()
-        for (i, ghost) in ghosts.enumerated() {
-            ghost.backgroundColor = i == 0 ? .clear : theme.text.color(0.03)
-            ghost.layer.borderColor = (i == 0 ? theme.accent.color(0.55) : theme.text.color(0.07)).cgColor
-        }
     }
 }
