@@ -39,6 +39,7 @@ final class Player {
     // Under `lock`.
     private var segments: [Segment] = []
     private var wantsPlay = false
+    private var analyzing = true
 
     // Main thread.
     private var heldPosition: Double = 0
@@ -173,6 +174,12 @@ final class Player {
         return min(seconds ?? heldPosition, current?.duration ?? 0)
     }
 
+    /// Off while Flaco is out of sight, where nobody sees the spectrum and iOS limits the CPU.
+    var analyzesSpectrum: Bool {
+        get { lock.sync { analyzing } }
+        set { lock.sync { analyzing = newValue } }
+    }
+
     /// The spectrum of what is coming out of the speaker now.
     func spectrumNow() -> [Float]? {
         guard state == .playing, let sample = sampleTime() else { return nil }
@@ -268,7 +275,7 @@ final class Player {
                 openNext(after: current.track, at: scheduled)
             }
             if buffer.frameLength > 0 {
-                spectrum.analyze(buffer, at: start)
+                if lock.sync({ analyzing }) { spectrum.analyze(buffer, at: start) }
                 return buffer
             }
         }

@@ -32,6 +32,7 @@ final class AlbumListViewController: UIViewController, UITableViewDataSource, UI
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(reload), name: Library.didChange, object: nil)
         center.addObserver(self, selector: #selector(refreshCurrent), name: Player.didChange, object: nil)
+        center.addObserver(self, selector: #selector(refreshEmpty), name: Sync.didChange, object: nil)
         ThemeCenter.shared.register(self)
         reload()
     }
@@ -40,7 +41,17 @@ final class AlbumListViewController: UIViewController, UITableViewDataSource, UI
         albums = Library.shared.albums
         table.reloadData()
         empty.isHidden = !albums.isEmpty
-        empty.scanning = Library.shared.isScanning
+        refreshEmpty()
+    }
+
+    @objc private func refreshEmpty() {
+        guard !empty.isHidden else { return }
+        let sync = Sync.shared
+        switch sync.phase {
+        case .checking: empty.show(scanning: Library.shared.isScanning, sync: "Checking \(Server.shared.host)…")
+        case .downloading: empty.show(scanning: false, sync: "\(sync.filesDone) of \(sync.filesTotal) from \(Server.shared.host)")
+        default: empty.show(scanning: Library.shared.isScanning, sync: nil)
+        }
     }
 
     @objc private func refreshCurrent() {
@@ -278,7 +289,14 @@ final class TrackRow: UIControl {
 /// What the list shows before any music is in.
 final class EmptyLibraryView: UIView {
     let button = UIButton(type: .custom)
-    var scanning = false { didSet { body.text = scanning ? "Looking for music…" : EmptyLibraryView.instructions } }
+    /// While a sync fills the empty library, its progress replaces the instructions.
+    func show(scanning: Bool, sync: String?) {
+        title.text = sync == nil ? "Add your music" : "Downloading your music"
+        body.text = sync ?? (scanning ? "Looking for music…" : EmptyLibraryView.instructions)
+        formats.isHidden = sync != nil
+        button.isHidden = sync != nil
+        setNeedsLayout()
+    }
 
     private static let instructions = "Drop files on Flaco in Finder, or choose them from Files."
     private let ghosts = (0..<4).map { _ in UIView() }

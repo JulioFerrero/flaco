@@ -24,6 +24,7 @@ final class Waveforms {
     private var jobs: [String: Job] = [:]
     private var done: Set<String> = []
     private var scheduled = false
+    private var paused = false
 
     private let directory: URL = {
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -57,10 +58,19 @@ final class Waveforms {
         }
     }
 
+    /// Paused while Flaco is out of sight: nobody sees a waveform there, and iOS ends a background app that
+    /// keeps the CPU busy for a minute.
+    func setPaused(_ paused: Bool) {
+        worker.async {
+            self.paused = paused
+            self.kick()
+        }
+    }
+
     // MARK: Worker
 
     private func kick() {
-        guard !scheduled else { return }
+        guard !scheduled, !paused else { return }
         let urgent = heard.map { !done.contains($0.path) } ?? false
         guard urgent || !library.isEmpty else { return }
         scheduled = true

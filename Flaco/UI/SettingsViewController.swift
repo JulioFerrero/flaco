@@ -1,6 +1,6 @@
 import UIKit
 
-/// Output, playback, look and library, as cards of rows in the cover's colors.
+/// Server, output, playback, look and library, as cards of rows in the cover's colors.
 final class SettingsViewController: UIViewController, Themeable {
     private let scroll = UIScrollView()
     private let glow = GlowView()
@@ -13,6 +13,13 @@ final class SettingsViewController: UIViewController, Themeable {
     private var notes: [UILabel] = []
     private var theme = Theme.neutral
 
+    private let server = SettingsRow(.value("Server"))
+    private let syncNow = SettingsRow(.action("Sync now"))
+    private let onServer = SettingsRow(.value("On server"))
+    private let onPhone = SettingsRow(.value("On this phone"))
+    private let autoSync = SettingsRow(.toggle("Sync when opened"))
+    private let cellular = SettingsRow(.toggle("Download on cellular"))
+    private let syncNote = UILabel()
     private let device = SettingsRow(.value("Device"))
     private let rate = SettingsRow(.value("Output rate"))
     private let replayGain = SettingsRow(.choice("ReplayGain", ReplayGainMode.allCases.map { $0.rawValue.uppercased() }))
@@ -40,6 +47,7 @@ final class SettingsViewController: UIViewController, Themeable {
         topBar.addSubview(topLine)
         scroll.delegate = self
 
+        section("SERVER", [server, syncNow, onServer, onPhone, autoSync, cellular], note: syncNote)
         section("OUTPUT", [device, rate], note: outputNote)
         section("PLAYBACK", [replayGain, clipping, resume])
         section("LOOK", [colors, spectrum, waveform])
@@ -48,6 +56,10 @@ final class SettingsViewController: UIViewController, Themeable {
         section("LIBRARY", [add, rescan], note: libraryNote)
 
         let settings = Settings.shared
+        server.onAction = { [weak self] in self?.editServer() }
+        syncNow.onAction = { Sync.shared.start() }
+        autoSync.onToggle = { settings.autoSync = $0 }
+        cellular.onToggle = { settings.cellular = $0 }
         replayGain.onChoice = { settings.replayGain = ReplayGainMode.allCases[$0] }
         clipping.onToggle = { settings.preventClipping = $0 }
         resume.onToggle = { settings.resume = $0 }
@@ -61,7 +73,7 @@ final class SettingsViewController: UIViewController, Themeable {
         rescan.onAction = { Library.shared.scan() }
 
         let center = NotificationCenter.default
-        for name in [Settings.didChange, Library.didChange, Player.didChange] {
+        for name in [Settings.didChange, Library.didChange, Player.didChange, Sync.didChange] {
             center.addObserver(self, selector: #selector(refresh), name: name, object: nil)
         }
         ThemeCenter.shared.register(self)
@@ -100,7 +112,7 @@ final class SettingsViewController: UIViewController, Themeable {
             y += 20
             labels[i].frame = CGRect(x: 16, y: y, width: width - 32, height: 14)
             y += 22
-            let height = CGFloat(card.rows.count) * 48
+            let height = card.height
             card.frame = CGRect(x: 12, y: y, width: width - 24, height: height)
             y += height
             if let note = notes.first(where: { $0.tag == i }) {
@@ -115,6 +127,7 @@ final class SettingsViewController: UIViewController, Themeable {
     @objc private func refresh() {
         let settings = Settings.shared
         let player = Player.shared
+        refreshSync()
         device.value = player.outputName
         rate.value = "\(Track.kilohertz(player.outputSampleRate)) kHz"
         outputNote.text = "Files play at their own rate where the output allows it, and are resampled otherwise."
@@ -126,6 +139,74 @@ final class SettingsViewController: UIViewController, Themeable {
         waveform.isOn = settings.waveform
         rescan.value = Library.shared.isScanning ? "SCANNING" : "\(Library.shared.tracks.count) TRACKS"
         view.setNeedsLayout()
+    }
+
+    private func refreshSync() {
+        let sync = Sync.shared
+        let configured = Server.shared.isConfigured
+        server.value = configured ? Server.shared.host : "SET UP"
+        syncNow.isEnabled = configured && sync.phase != .checking
+        syncNow.bar = nil
+        switch sync.phase {
+        case .idle:
+            syncNow.value = sync.lastSynced == nil ? "" : "UP TO DATE"
+            syncNote.text = sync.lastSynced.map { "Synced \(Self.when($0))." }
+                ?? (configured ? "" : "Connect a Navidrome or Subsonic server to keep your music in step with it.")
+        case .checking:
+            syncNow.value = "CHECKING"
+        case .downloading:
+            syncNow.value = "\(sync.filesDone) / \(sync.filesTotal)"
+            syncNow.bar = sync.bytesTotal > 0 ? [Double(sync.bytesDone) / Double(sync.bytesTotal)] : nil
+            syncNote.text = "Downloading \(Sync.bytes(sync.bytesDone)) of \(Sync.bytes(sync.bytesTotal)). It carries on with Flaco closed."
+        case .failed(let message):
+            syncNow.value = "FAILED"
+            syncNote.text = message
+        }
+        onServer.value = sync.server.map { "\($0.tracks) TRACKS · \(Sync.bytes($0.bytes))" } ?? "—"
+        let music = Library.shared.tracks.reduce(0) { $0 + $1.size }
+        let free = Sync.freeSpace, capacity = Sync.capacity
+        onPhone.value = "\(Sync.bytes(music)) · \(Sync.bytes(free)) FREE"
+        // Flaco's music, then everything else on the phone; the rest of the track is free space.
+        onPhone.bar = capacity > 0 ? [Double(music) / Double(capacity), Double(max(capacity - free - music, 0)) / Double(capacity)] : nil
+        autoSync.isOn = Settings.shared.autoSync
+        cellular.isOn = Settings.shared.cellular
+    }
+
+    private static func when(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = Calendar.current.isDateInToday(date) ? "'at' HH:mm" : "d MMM 'at' HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private func editServer() {
+        let current = Server.shared
+        let alert = UIAlertController(title: "Music server", message: current.isConfigured ? "Leave the password empty to keep the saved one." : nil, preferredStyle: .alert)
+        alert.addTextField {
+            $0.placeholder = "music.example.com"
+            $0.text = current.address
+            $0.keyboardType = .URL
+            $0.autocapitalizationType = .none
+            $0.autocorrectionType = .no
+        }
+        alert.addTextField {
+            $0.placeholder = "User"
+            $0.text = current.user
+            $0.autocapitalizationType = .none
+            $0.autocorrectionType = .no
+        }
+        alert.addTextField {
+            $0.placeholder = "Password"
+            $0.isSecureTextEntry = true
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Connect", style: .default) { [weak alert] _ in
+            guard let fields = alert?.textFields, fields.count == 3 else { return }
+            let password = fields[2].text ?? ""
+            current.connect(address: fields[0].text ?? "", user: fields[1].text ?? "", password: password.isEmpty ? nil : password)
+            Sync.shared.start()
+            NotificationCenter.default.post(name: Sync.didChange, object: nil)
+        })
+        present(alert, animated: true)
     }
 
     func apply(_ theme: Theme) {
@@ -173,11 +254,15 @@ final class SettingsCard: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    var height: CGFloat { rows.reduce(0) { $0 + $1.height } }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        var y: CGFloat = 0
         for (i, row) in rows.enumerated() {
-            row.frame = CGRect(x: 0, y: CGFloat(i) * 48, width: bounds.width, height: 48)
-            if i > 0 { lines[i - 1].frame = CGRect(x: 0, y: CGFloat(i) * 48, width: bounds.width, height: UIView.hairline) }
+            row.frame = CGRect(x: 0, y: y, width: bounds.width, height: row.height)
+            if i > 0 { lines[i - 1].frame = CGRect(x: 0, y: y, width: bounds.width, height: UIView.hairline) }
+            y += row.height
         }
     }
 
@@ -196,7 +281,25 @@ final class SettingsRow: UIView {
 
     var onToggle: ((Bool) -> Void)?
     var onChoice: ((Int) -> Void)?
-    var onAction: (() -> Void)?
+    var onAction: (() -> Void)? { didSet { restyle() } }
+
+    var isEnabled = true {
+        didSet {
+            button.isEnabled = isEnabled
+            label.alpha = isEnabled ? 1 : 0.4
+        }
+    }
+
+    /// A thin bar under the row, filled left to right by these fractions in turn.
+    var bar: [Double]? {
+        didSet {
+            if (bar == nil) != (oldValue == nil) { superview?.superview?.setNeedsLayout() }
+            barTrack.isHidden = bar == nil
+            setNeedsLayout()
+        }
+    }
+
+    var height: CGFloat { bar == nil ? 48 : 60 }
 
     var value: String? {
         get { valueLabel.text }
@@ -216,16 +319,25 @@ final class SettingsRow: UIView {
     private let toggle = UISwitch()
     private var options: [ChipButton] = []
     private let button = UIButton(type: .custom)
+    private let barTrack = UIView()
+    private let barFills = [UIView(), UIView()]
     private var theme = Theme.neutral
 
     init(_ kind: Kind) {
         self.kind = kind
         super.init(frame: .zero)
         addSubview(label)
+        barTrack.isHidden = true
+        barTrack.layer.cornerRadius = 1.5
+        barTrack.clipsToBounds = true
+        barFills.forEach(barTrack.addSubview)
+        addSubview(barTrack)
         switch kind {
         case .value(let title):
             label.text = title
             addSubview(valueLabel)
+            button.addAction(UIAction { [weak self] _ in self?.onAction?() }, for: .touchUpInside)
+            addSubview(button)
         case .toggle(let title):
             label.text = title
             toggle.addAction(UIAction { [weak self] _ in
@@ -258,9 +370,18 @@ final class SettingsRow: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let width = bounds.width, height = bounds.height
+        let width = bounds.width
+        let height = bar == nil ? bounds.height : 44
         label.frame = CGRect(x: 14, y: 0, width: width * 0.55, height: height)
         valueLabel.frame = CGRect(x: width * 0.4, y: 0, width: width * 0.6 - 14, height: height)
+        barTrack.frame = CGRect(x: 14, y: 44, width: width - 28, height: 3)
+        var filled: CGFloat = 0
+        for (i, fill) in barFills.enumerated() {
+            let value = bar.map { i < $0.count ? $0[i] : 0 } ?? 0
+            let fraction = CGFloat(min(max(value, 0), 1))
+            fill.frame = CGRect(x: filled, y: 0, width: barTrack.bounds.width * fraction, height: 3)
+            filled += fill.frame.width
+        }
         toggle.frame.origin = CGPoint(x: width - 14 - toggle.bounds.width, y: (height - toggle.bounds.height) / 2)
         button.frame = bounds
         var x = width - 8
@@ -283,7 +404,14 @@ final class SettingsRow: UIView {
         } else {
             label.textColor = theme.text.color()
         }
-        valueLabel.textColor = theme.secondary
+        if case .value = kind, onAction != nil {
+            valueLabel.textColor = theme.accent.color()
+        } else {
+            valueLabel.textColor = theme.secondary
+        }
+        barTrack.backgroundColor = theme.line.color()
+        barFills[0].backgroundColor = theme.accent.color()
+        barFills[1].backgroundColor = theme.text.color(0.3)
         toggle.onTintColor = theme.accent.color()
         for (i, option) in options.enumerated() {
             option.isOn = i == selected

@@ -46,6 +46,18 @@ final class Settings {
         set { store(newValue, "waveform") }
     }
 
+    /// Checks the server each time Flaco opens.
+    var autoSync: Bool {
+        get { flag("autoSync", true) }
+        set { store(newValue, "autoSync") }
+    }
+
+    /// Lets downloads use cellular data, not only Wi-Fi.
+    var cellular: Bool {
+        get { flag("cellular", false) }
+        set { store(newValue, "cellular") }
+    }
+
     private func flag(_ key: String, _ fallback: Bool) -> Bool {
         defaults.object(forKey: key) as? Bool ?? fallback
     }

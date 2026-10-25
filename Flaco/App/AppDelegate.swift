@@ -10,6 +10,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ) -> Bool {
         Library.shared.load()
         Player.shared.restore()
+        Server.shared.adoptSeed()
+        Sync.shared.reconnect()
+        if application.applicationState == .background { setVisible(false) }
 
         let navigation = UINavigationController(rootViewController: MainViewController())
         navigation.setNavigationBarHidden(true, animated: false)
@@ -25,11 +28,27 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+        setVisible(true)
         Library.shared.scan()
+        Sync.shared.startIfDue()
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
+        setVisible(false)
         Player.shared.save()
+    }
+
+    /// Work only the screen needs stops while Flaco is out of sight.
+    private func setVisible(_ visible: Bool) {
+        Waveforms.shared.setPaused(!visible)
+        Player.shared.analyzesSpectrum = visible
+    }
+
+    /// Downloads finished while Flaco was closed; it was woken to place them.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        Sync.shared.backgroundCompletion = completionHandler
+        Sync.shared.reconnect()
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
