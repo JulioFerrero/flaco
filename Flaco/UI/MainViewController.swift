@@ -48,6 +48,7 @@ final class MainViewController: UIViewController, Themeable {
         applySettings()
         playerChanged()
         show(.playlist, animated: false)
+        Waveforms.shared.prepareLibrary()
 
         let link = CADisplayLink(target: self, selector: #selector(step))
         link.add(to: .main, forMode: .common)
@@ -210,6 +211,7 @@ final class MainViewController: UIViewController, Themeable {
 
     @objc private func libraryChanged() {
         updateTheme(animated: true)
+        Waveforms.shared.prepareLibrary()
     }
 
     @objc private func settingsChanged() {

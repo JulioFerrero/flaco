@@ -1,17 +1,27 @@
 import AVFoundation
 
-/// The loudness outline of a track for the seekbar: 100 RMS levels, computed once in the background and kept
-/// in Caches.
+/// The loudness outline of a track for the seekbar: 100 RMS levels on a fixed decibel scale, so a bar's height
+/// means the same in every song. Each track is decoded once and kept in Caches. The one being heard is drawn
+/// bar by bar as it decodes; the rest of the library is worked through in the background.
 final class Waveforms {
     static let shared = Waveforms()
     static let didUpdate = Notification.Name("FlacoWaveformDidUpdate")
     static let count = 100
+    /// A bar not decoded yet.
+    static let unknown: Float = -1
 
+    // Main thread.
     private var levels: [String: [Float]] = [:]
-    private var exact: Set<String> = []
     private var working: Set<String> = []
-    private let quick = DispatchQueue(label: "flaco.waveforms.quick", qos: .userInitiated)
-    private let full = DispatchQueue(label: "flaco.waveforms.full", qos: .utility)
+    private var finished: Set<String> = []
+    private var libraryRunning = false
+
+    private let heard = DispatchQueue(label: "flaco.waveforms", qos: .userInitiated)
+    private let library = DispatchQueue(label: "flaco.waveforms.library", qos: .utility)
+    private let lock = NSLock()
+    private var heardJobs = 0
+    private var heardBusy: Bool { lock.sync { heardJobs > 0 } }
+
     private let directory: URL = {
         let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Waveforms", isDirectory: true)
@@ -23,92 +33,127 @@ final class Waveforms {
         levels[track.path]
     }
 
-    /// A track about to be heard gets a sampled outline at once and the exact one after; a track `ahead`
-    /// in the queue gets only the exact one, in the background.
-    func prepare(_ track: Track, ahead: Bool = false) {
+    /// For the track being heard: from disk if it was done before, else decoded now, bar by bar.
+    func prepare(_ track: Track) {
         let path = track.path
-        guard !exact.contains(path), !working.contains(path) else { return }
+        guard !finished.contains(path), !working.contains(path) else { return }
         working.insert(path)
-        let file = directory.appendingPathComponent(Library.hash("\(track.path)|\(track.modified)") + ".wave")
-        (ahead ? full : quick).async {
-            if let saved = Self.load(file) {
-                self.publish(saved, for: path, exact: true)
+        lock.sync { heardJobs += 1 }
+        heard.async {
+            defer { self.lock.sync { self.heardJobs -= 1 } }
+            if let saved = self.load(track) {
+                self.publish(saved, for: path, done: true)
                 return
             }
             let started = Date()
-            if !ahead, let sampled = Self.compute(track, sampled: true) {
-                self.publish(sampled, for: path, exact: false)
-                Log.write(String(format: "waveform sampled in %.2f s: %@", Date().timeIntervalSince(started), track.title))
-            }
-            self.full.async {
-                let started = Date()
-                let computed = Self.compute(track, sampled: false)
-                Log.write(String(format: "waveform exact in %.2f s%@: %@", Date().timeIntervalSince(started), ahead ? " (ahead)" : "", track.title))
-                if let computed {
-                    try? computed.withUnsafeBufferPointer { Data(buffer: $0) }.write(to: file, options: .atomic)
-                }
-                self.publish(computed, for: path, exact: true)
-            }
+            let computed = Self.compute(track) { partial in self.publish(partial, for: path, done: false) }
+            self.store(computed, for: track)
+            self.publish(computed, for: path, done: true)
+            Log.write(String(format: "waveform in %.2f s: %@", Date().timeIntervalSince(started), track.title))
         }
     }
 
-    private func publish(_ result: [Float]?, for path: String, exact isExact: Bool) {
+    /// Works through the library from the track being heard onward, one file at a time, giving way whenever
+    /// the heard track needs decoding.
+    func prepareLibrary() {
+        guard !libraryRunning else { return }
+        libraryRunning = true
+        nextInLibrary()
+    }
+
+    private func nextInLibrary() {
+        let tracks = Library.shared.tracks
+        let start = Player.shared.current.flatMap { tracks.firstIndex(of: $0) } ?? 0
+        let order = tracks.indices.map { tracks[(start + $0) % tracks.count] }
+        guard let track = order.first(where: { !finished.contains($0.path) && !working.contains($0.path) }) else {
+            libraryRunning = false
+            return
+        }
+        working.insert(track.path)
+        library.async {
+            while self.heardBusy { Thread.sleep(forTimeInterval: 0.5) }
+            var result = self.load(track)
+            if result == nil {
+                let started = Date()
+                result = Self.compute(track, progress: nil)
+                self.store(result, for: track)
+                Log.write(String(format: "waveform in %.2f s (library): %@", Date().timeIntervalSince(started), track.title))
+            }
+            self.publish(result, for: track.path, done: true)
+            DispatchQueue.main.async { self.nextInLibrary() }
+        }
+    }
+
+    private func publish(_ result: [Float]?, for path: String, done: Bool) {
         DispatchQueue.main.async {
-            if isExact { self.working.remove(path) }
-            guard let result, !self.exact.contains(path) else { return }
+            if done {
+                self.working.remove(path)
+                self.finished.insert(path)
+            }
+            guard let result else { return }
             self.levels[path] = result
-            if isExact { self.exact.insert(path) }
             NotificationCenter.default.post(name: Self.didUpdate, object: path)
         }
     }
 
-    private static func load(_ url: URL) -> [Float]? {
-        guard let data = try? Data(contentsOf: url), data.count == count * MemoryLayout<Float>.size else { return nil }
+    // MARK: Files
+
+    private func file(for track: Track) -> URL {
+        directory.appendingPathComponent(Library.hash("\(track.path)|\(track.modified)") + ".outline")
+    }
+
+    private func load(_ track: Track) -> [Float]? {
+        guard let data = try? Data(contentsOf: file(for: track)),
+              data.count == Self.count * MemoryLayout<Float>.size else { return nil }
         return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 
-    /// RMS per bar, from every fourth frame, or `sampled` from eight short slices of each bar's stretch:
-    /// several times quicker, and within a few percent of the exact outline.
-    private static func compute(_ track: Track, sampled: Bool) -> [Float]? {
-        guard let file = try? AVAudioFile(forReading: track.url), file.length > 0 else { return nil }
+    private func store(_ levels: [Float]?, for track: Track) {
+        guard let levels else { return }
+        try? levels.withUnsafeBufferPointer { Data(buffer: $0) }.write(to: file(for: track), options: .atomic)
+    }
+
+    // MARK: Decoding
+
+    /// RMS per bar from every fourth frame, as 16-bit integers straight from the decoder. `progress` gets the
+    /// bars so far about ten times along the way, the rest `unknown`.
+    private static func compute(_ track: Track, progress: (([Float]) -> Void)?) -> [Float]? {
+        guard let file = try? AVAudioFile(forReading: track.url, commonFormat: .pcmFormatInt16, interleaved: true),
+              file.length > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 32768) else { return nil }
         let total = file.length
         let channels = Int(file.processingFormat.channelCount)
-        let slices = 8
-        let capacity: AVAudioFrameCount = sampled ? 2048 : 65536
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: capacity) else { return nil }
         var sums = [Double](repeating: 0, count: count)
         var counts = [Int](repeating: 0, count: count)
+        var position: AVAudioFramePosition = 0
+        var reported = 0
 
-        func add(_ frames: Int, at position: AVAudioFramePosition, step: Int) {
-            guard let data = buffer.floatChannelData else { return }
-            for i in stride(from: 0, to: frames, by: step) {
-                var value: Float = 0
-                for channel in 0..<channels { value += data[channel][i] }
-                value /= Float(channels)
+        while position < total {
+            guard (try? file.read(into: buffer)) != nil, buffer.frameLength > 0,
+                  let samples = buffer.int16ChannelData?[0] else { break }
+            let frames = Int(buffer.frameLength)
+            for i in stride(from: 0, to: frames, by: 4) {
+                var value: Int32 = 0
+                for channel in 0..<channels { value += Int32(samples[i * channels + channel]) }
+                let mono = Double(value) / Double(channels * 32768)
                 let bin = min(count - 1, Int((position + AVAudioFramePosition(i)) * AVAudioFramePosition(count) / total))
-                sums[bin] += Double(value * value)
+                sums[bin] += mono * mono
                 counts[bin] += 1
             }
-        }
-
-        if sampled {
-            for slice in 0..<count * slices {
-                let start = total * AVAudioFramePosition(slice) / AVAudioFramePosition(count * slices)
-                file.framePosition = start
-                guard (try? file.read(into: buffer, frameCount: capacity)) != nil else { continue }
-                add(Int(buffer.frameLength), at: start, step: 2)
-            }
-        } else {
-            var position: AVAudioFramePosition = 0
-            while position < total {
-                guard (try? file.read(into: buffer)) != nil, buffer.frameLength > 0 else { break }
-                add(Int(buffer.frameLength), at: position, step: 4)
-                position += AVAudioFramePosition(buffer.frameLength)
+            position += AVAudioFramePosition(frames)
+            let complete = Int(position * AVAudioFramePosition(count) / total)
+            if let progress, complete >= reported + 10, complete < count {
+                reported = complete
+                progress((0..<count).map { $0 < complete ? level(sums[$0], counts[$0]) : unknown })
             }
         }
+        return (0..<count).map { level(sums[$0], counts[$0]) }
+    }
 
-        let rms = zip(sums, counts).map { $1 > 0 ? Float(($0 / Double($1)).squareRoot()) : 0 }
-        guard let loudest = rms.max(), loudest > 0 else { return rms }
-        return rms.map { pow($0 / loudest, 0.8) }
+    /// −33 dBFS RMS and below draws as a sliver, −3 dBFS and above full height.
+    private static func level(_ sum: Double, _ count: Int) -> Float {
+        guard count > 0 else { return 0 }
+        let decibels = 10 * log10(max(sum / Double(count), 1e-10))
+        return Float(min(max((decibels + 33) / 30, 0.03), 1))
     }
 }

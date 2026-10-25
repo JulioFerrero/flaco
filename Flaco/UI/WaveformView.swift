@@ -82,10 +82,12 @@ final class WaveformView: UIView {
             let barWidth: CGFloat = 2
             let gap = (width - CGFloat(count) * barWidth) / CGFloat(max(count - 1, 1))
             for i in 0..<count {
-                let level = CGFloat(levels?[i] ?? 0.04)
-                let h = max(2, level * (height - 2))
+                let value = levels?[i] ?? Waveforms.unknown
+                let known = value >= 0
+                let h = max(2, CGFloat(known ? value : 0) * (height - 2))
                 let played = (Double(i) + 0.5) / Double(count) < shown
-                context.setFillColor((played ? playedColor : idleColor).cgColor)
+                // Bars still decoding wait as faint slivers.
+                context.setFillColor((played && known ? playedColor : idleColor).cgColor)
                 context.fill(CGRect(x: CGFloat(i) * (barWidth + gap), y: (height - h) / 2, width: barWidth, height: h))
             }
         } else {

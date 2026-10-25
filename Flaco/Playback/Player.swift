@@ -342,7 +342,6 @@ final class Player {
         if isNew {
             queue.didStart(track)
             Waveforms.shared.prepare(track)
-            if let next = queue.next(after: track) { Waveforms.shared.prepare(next, ahead: true) }
         }
     }
 
