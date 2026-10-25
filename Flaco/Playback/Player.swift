@@ -411,6 +411,16 @@ final class Player {
             if reason == .oldDeviceUnavailable { self?.pause() }
             self?.changed()
         }
+        center.addObserver(forName: Library.didChange, object: nil, queue: .main) { [weak self] _ in
+            // The file went away (deleted in Finder, say): let go of it unless it's still being heard.
+            guard let self, let track = self.current, self.state != .playing,
+                  Library.shared.track(at: track.path) == nil else { return }
+            self.current = nil
+            self.heldPosition = 0
+            self.needsSource = true
+            self.state = .stopped
+            self.changed()
+        }
         center.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in
             guard let self, let track = self.current else { return }
             self.gain = self.gainDecibels(for: track)

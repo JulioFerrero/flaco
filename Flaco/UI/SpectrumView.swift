@@ -80,10 +80,12 @@ final class SpectrumView: UIView {
         for i in 0..<count {
             let x = CGFloat(i) * (barWidth + gap)
             let level = CGFloat(levels[i])
-            let h = max(2, level * reach)
-            context.setFillColor(barColor.withAlphaComponent(0.45 + 0.55 * level).cgColor)
-            context.fill(CGRect(x: x, y: height - h, width: barWidth, height: h))
-            if showsCaps {
+            if level > 0.002 {
+                let h = max(2, level * reach)
+                context.setFillColor(barColor.withAlphaComponent(0.45 + 0.55 * level).cgColor)
+                context.fill(CGRect(x: x, y: height - h, width: barWidth, height: h))
+            }
+            if showsCaps, peaks[i] > 0.002 {
                 let top = height - max(2, CGFloat(peaks[i]) * reach) - 3
                 context.setFillColor(capColor.cgColor)
                 context.fill(CGRect(x: x, y: max(0, top), width: barWidth, height: 2))
