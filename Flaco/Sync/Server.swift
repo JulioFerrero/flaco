@@ -66,6 +66,13 @@ final class Server {
         if moved { Sync.shared.forgetServer() }
     }
 
+    /// The Keychain outlives the app, so a fresh install would otherwise find an old password waiting.
+    func clearIfFreshInstall() {
+        guard !defaults.bool(forKey: "installed") else { return }
+        defaults.set(true, forKey: "installed")
+        password = nil
+    }
+
     /// Forgets the server. Music already downloaded stays on the phone.
     func disconnect() {
         defaults.removeObject(forKey: "serverAddress")

@@ -8,6 +8,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
+        Server.shared.clearIfFreshInstall()
         Library.shared.load()
         Player.shared.restore()
         Sync.shared.reconnect()
