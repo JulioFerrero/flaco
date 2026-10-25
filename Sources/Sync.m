@@ -104,6 +104,12 @@ static NSString *FLSortKey(NSString *name) {
     if ([mode isEqual:@"everything"]) _choice = FLChoiceEverything;
     else if ([mode isEqual:@"chosen"]) _choice = FLChoiceChosen;
     else _choice = FLChoiceUndecided;
+    // Flaco mirrored the whole server before there was a choice to make; music downloaded then, with nothing
+    // chosen, means everything.
+    if (!saved && _manifest.count) {
+        _choice = FLChoiceEverything;
+        [self saveChoice];
+    }
     return self;
 }
 
