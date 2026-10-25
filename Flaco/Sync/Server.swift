@@ -7,12 +7,22 @@ import Security
 final class Server {
     static let shared = Server()
 
-    struct Song {
+    struct Song: Codable {
         let id: String
         /// Where it goes under Documents.
         let path: String
         let size: Int64
+        let albumID: String
+        let title: String
+        let artist: String
         let album: String
+    }
+
+    /// What the setup screen asks for.
+    struct Connection {
+        var address: String
+        var user: String
+        var password: String
     }
 
     struct Listing {
@@ -33,37 +43,46 @@ final class Server {
     var user: String { defaults.string(forKey: "serverUser") ?? "" }
     var host: String { URL(string: address)?.host ?? address }
     var isConfigured: Bool { !address.isEmpty && !user.isEmpty && password != nil }
+    var savedPassword: String? { password }
 
-    /// Saves a connection. A nil password keeps the saved one.
-    func connect(address: String, user: String, password: String?) {
-        var address = address.trimmingCharacters(in: .whitespaces)
-        if !address.isEmpty, !address.contains("://") { address = "https://" + address }
-        while address.hasSuffix("/") { address.removeLast() }
-        let moved = address != self.address
-        defaults.set(address, forKey: "serverAddress")
-        defaults.set(user.trimmingCharacters(in: .whitespaces), forKey: "serverUser")
-        if let password { self.password = password }
-        if moved { Sync.shared.forgetServer() }
-    }
-
-    /// A connection dropped into Application Support as connect.json, read once into the Keychain.
-    func adoptSeed() {
-        let url = Library.support.appendingPathComponent("connect.json")
-        guard let data = try? Data(contentsOf: url),
-              let seed = try? JSONDecoder().decode([String: String].self, from: data),
-              let address = seed["address"], let user = seed["user"], let password = seed["password"] else { return }
-        connect(address: address, user: user, password: password)
-        try? FileManager.default.removeItem(at: url)
-    }
-
-    // MARK: Requests
-
-    /// The server's name and version, to show it answers and the password is right.
-    func ping() async throws -> String {
-        let response = try await call("ping")
+    /// Tries a connection without saving it: the server's name and version when it answers and the password
+    /// is right.
+    func check(_ connection: Connection) async throws -> String {
+        let connection = Self.tidy(connection)
+        guard !connection.address.isEmpty, !connection.user.isEmpty, !connection.password.isEmpty else {
+            throw Failure(message: "Fill in all three.")
+        }
+        let response = try await call("ping", via: connection)
         let name = (response["type"] as? String).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "Subsonic"
         return [name, response["serverVersion"] as? String].compactMap { $0 }.joined(separator: " ")
     }
+
+    func save(_ connection: Connection) {
+        let connection = Self.tidy(connection)
+        let moved = connection.address != address
+        defaults.set(connection.address, forKey: "serverAddress")
+        defaults.set(connection.user, forKey: "serverUser")
+        password = connection.password
+        if moved { Sync.shared.forgetServer() }
+    }
+
+    /// Forgets the server. Music already downloaded stays on the phone.
+    func disconnect() {
+        defaults.removeObject(forKey: "serverAddress")
+        defaults.removeObject(forKey: "serverUser")
+        password = nil
+        Sync.shared.forgetServer()
+    }
+
+    private static func tidy(_ connection: Connection) -> Connection {
+        var address = connection.address.trimmingCharacters(in: .whitespaces)
+        if !address.isEmpty, !address.contains("://") { address = "https://" + address }
+        while address.hasSuffix("/") { address.removeLast() }
+        return Connection(address: address, user: connection.user.trimmingCharacters(in: .whitespaces),
+                          password: connection.password)
+    }
+
+    // MARK: Requests
 
     /// Every song on the server, 500 at a time.
     func listing() async throws -> Listing {
@@ -89,7 +108,10 @@ final class Server {
             // The same album sent in two ways keeps both copies apart.
             if taken.contains(path.lowercased()) { path = Self.localPath(reported, keepingSource: true) }
             taken.insert(path.lowercased())
-            songs.append(Song(id: id, path: path, size: size, album: item["albumId"] as? String ?? ""))
+            songs.append(Song(
+                id: id, path: path, size: size, albumID: item["albumId"] as? String ?? "",
+                title: item["title"] as? String ?? (path as NSString).lastPathComponent,
+                artist: item["artist"] as? String ?? "", album: item["album"] as? String ?? ""))
         }
         return Listing(songs: songs, scanning: scanning)
     }
@@ -108,13 +130,14 @@ final class Server {
         return parts.joined(separator: "/")
     }
 
-    private func call(_ endpoint: String, _ items: [String: String] = [:]) async throws -> [String: Any] {
-        guard let url = url(endpoint, items) else { throw Failure(message: "No server set up.") }
+    private func call(_ endpoint: String, _ items: [String: String] = [:], via connection: Connection? = nil) async throws -> [String: Any] {
+        let host = connection.flatMap { URL(string: $0.address)?.host } ?? self.host
+        guard let url = url(endpoint, items, via: connection) else { throw Failure(message: "No server set up.") }
         let data: Data
         do {
             (data, _) = try await URLSession.shared.data(from: url)
         } catch {
-            throw Failure(message: "Can't reach \(host).")
+            throw Failure(message: "Can't reach \(host.isEmpty ? "the server" : host).")
         }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let response = root["subsonic-response"] as? [String: Any] else {
@@ -129,13 +152,15 @@ final class Server {
     }
 
     /// Token sign-in: the password never travels, only a hash of it with a fresh salt.
-    private func url(_ endpoint: String, _ items: [String: String]) -> URL? {
-        guard let password, var components = URLComponents(string: address) else { return nil }
+    private func url(_ endpoint: String, _ items: [String: String], via connection: Connection? = nil) -> URL? {
+        let saved = self.password.map { Connection(address: address, user: user, password: $0) }
+        guard let connection = connection ?? saved, var components = URLComponents(string: connection.address),
+              components.host != nil else { return nil }
         let salt = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12)
-        let token = Insecure.MD5.hash(data: Data((password + salt).utf8)).map { String(format: "%02x", $0) }.joined()
+        let token = Insecure.MD5.hash(data: Data((connection.password + salt).utf8)).map { String(format: "%02x", $0) }.joined()
         components.path += "/rest/\(endpoint)"
         components.queryItems = [
-            URLQueryItem(name: "u", value: user), URLQueryItem(name: "t", value: token),
+            URLQueryItem(name: "u", value: connection.user), URLQueryItem(name: "t", value: token),
             URLQueryItem(name: "s", value: String(salt)), URLQueryItem(name: "v", value: "1.16.1"),
             URLQueryItem(name: "c", value: "Flaco"), URLQueryItem(name: "f", value: "json"),
         ] + items.map { URLQueryItem(name: $0.key, value: $0.value) }

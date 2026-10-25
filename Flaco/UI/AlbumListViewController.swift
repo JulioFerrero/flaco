@@ -4,6 +4,8 @@ import UIKit
 /// Playing a track carries on into the albums after it.
 final class AlbumListViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, Themeable {
     var onImport: (() -> Void)?
+    var onConnect: (() -> Void)?
+    var onShowDownloads: (() -> Void)?
 
     private let table = UITableView(frame: .zero, style: .plain)
     private let empty = EmptyLibraryView()
@@ -27,6 +29,10 @@ final class AlbumListViewController: UIViewController, UITableViewDataSource, UI
         empty.frame = view.bounds
         empty.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         empty.button.addTarget(self, action: #selector(importTapped), for: .touchUpInside)
+        empty.secondButton.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            Server.shared.isConfigured ? self.onShowDownloads?() : self.onConnect?()
+        }, for: .touchUpInside)
         view.addSubview(empty)
 
         let center = NotificationCenter.default
@@ -48,9 +54,12 @@ final class AlbumListViewController: UIViewController, UITableViewDataSource, UI
         guard !empty.isHidden else { return }
         let sync = Sync.shared
         switch sync.phase {
-        case .checking: empty.show(scanning: Library.shared.isScanning, sync: "Checking \(Server.shared.host)…")
-        case .downloading: empty.show(scanning: false, sync: "\(sync.filesDone) of \(sync.filesTotal) from \(Server.shared.host)")
-        default: empty.show(scanning: Library.shared.isScanning, sync: nil)
+        case .checking:
+            empty.show(scanning: Library.shared.isScanning, sync: "Checking the server…")
+        case .downloading:
+            empty.show(scanning: false, sync: "\(Sync.bytes(sync.bytesDone)) of \(Sync.bytes(sync.bytesTotal)) · \(Sync.rate(sync.speed))")
+        default:
+            empty.show(scanning: Library.shared.isScanning, sync: nil)
         }
     }
 
@@ -289,12 +298,17 @@ final class TrackRow: UIControl {
 /// What the list shows before any music is in.
 final class EmptyLibraryView: UIView {
     let button = UIButton(type: .custom)
+    /// Connect a server, or while downloading, see each song.
+    let secondButton = UIButton(type: .system)
     /// While a sync fills the empty library, its progress replaces the instructions.
     func show(scanning: Bool, sync: String?) {
         title.text = sync == nil ? "Add your music" : "Downloading your music"
         body.text = sync ?? (scanning ? "Looking for music…" : EmptyLibraryView.instructions)
         formats.isHidden = sync != nil
         button.isHidden = sync != nil
+        let second = sync != nil ? "Show downloads" : Server.shared.isConfigured ? nil : "Connect a server"
+        secondButton.isHidden = second == nil
+        if secondButton.title(for: .normal) != second { secondButton.setTitle(second, for: .normal) }
         setNeedsLayout()
     }
 
@@ -318,7 +332,9 @@ final class EmptyLibraryView: UIView {
             ghost.layer.borderWidth = 1
             addSubview(ghost)
         }
-        for view in [title, body, formats, button] as [UIView] {
+        secondButton.titleLabel?.font = Fonts.text(15)
+        secondButton.isHidden = true
+        for view in [title, body, formats, button, secondButton] as [UIView] {
             addSubview(view)
         }
     }
@@ -346,6 +362,9 @@ final class EmptyLibraryView: UIView {
         y += 38
         let buttonWidth = ceil(button.titleLabel?.intrinsicContentSize.width ?? 0) + 44
         button.frame = CGRect(x: (bounds.width - buttonWidth) / 2, y: y, width: buttonWidth, height: 44)
+        // Under the instructions while downloading, else under the button.
+        if !button.isHidden { y += 52 }
+        secondButton.frame = CGRect(x: 24, y: y, width: bounds.width - 48, height: 44)
     }
 
     func apply(_ theme: Theme) {
@@ -354,6 +373,7 @@ final class EmptyLibraryView: UIView {
         formats.textColor = theme.secondary
         button.backgroundColor = theme.text.color()
         button.setTitleColor(theme.background.color(), for: .normal)
+        secondButton.tintColor = theme.accent.color()
         for (i, ghost) in ghosts.enumerated() {
             ghost.backgroundColor = i == 0 ? .clear : theme.text.color(0.03)
             ghost.layer.borderColor = (i == 0 ? theme.accent.color(0.55) : theme.text.color(0.07)).cgColor

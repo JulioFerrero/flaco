@@ -10,7 +10,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ) -> Bool {
         Library.shared.load()
         Player.shared.restore()
-        Server.shared.adoptSeed()
         Sync.shared.reconnect()
         if application.applicationState == .background { setVisible(false) }
 

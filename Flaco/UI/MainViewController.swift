@@ -155,6 +155,11 @@ final class MainViewController: UIViewController, Themeable {
             guard let self else { return }
             Importer.present(from: self)
         }
+        albumList.onConnect = { [weak self] in
+            self?.navigationController?.pushViewController(ServerViewController(), animated: true)
+        }
+        albumList.onShowDownloads = { [weak self] in self?.presentDownloads() }
+        tabs.syncButton.addAction(UIAction { [weak self] _ in self?.presentDownloads() }, for: .touchUpInside)
         library.onShowAlbum = { [weak self] album in self?.showAlbum(album) }
         search.onShowAlbum = { [weak self] album in self?.showAlbum(album) }
         search.onShowArtist = { [weak self] name in
@@ -171,11 +176,26 @@ final class MainViewController: UIViewController, Themeable {
         center.addObserver(self, selector: #selector(settingsChanged), name: Settings.didChange, object: nil)
         center.addObserver(self, selector: #selector(waveformReady(_:)), name: Waveforms.didUpdate, object: nil)
         center.addObserver(self, selector: #selector(fillQuery(_:)), name: SearchViewController.fillQuery, object: nil)
+        center.addObserver(self, selector: #selector(syncChanged), name: Sync.didChange, object: nil)
     }
 
     private func showAlbum(_ album: Album) {
         show(.playlist)
         DispatchQueue.main.async { self.albumList.scroll(toAlbum: album.key) }
+    }
+
+    private func presentDownloads() {
+        guard presentedViewController == nil else { return }
+        present(DownloadsViewController.sheet(), animated: true)
+    }
+
+    @objc private func syncChanged() {
+        let sync = Sync.shared
+        switch sync.phase {
+        case .checking: tabs.showSync("")
+        case .downloading: tabs.showSync(sync.bytesTotal > 0 ? "\(Int(Double(sync.bytesDone) * 100 / Double(sync.bytesTotal)))%" : "")
+        default: tabs.showSync(nil)
+        }
     }
 
     private func presentQueue() {

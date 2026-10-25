@@ -1,17 +1,7 @@
 import UIKit
 
 /// Server, output, playback, look and library, as cards of rows in the cover's colors.
-final class SettingsViewController: UIViewController, Themeable {
-    private let scroll = UIScrollView()
-    private let glow = GlowView()
-    private let topBar = UIView()
-    private let topLine = UIView()
-    private let back = Icon.button("chevron.left", 18, "Back")
-    private let heading = UILabel(font: Fonts.text(17, .semibold))
-    private var cards: [SettingsCard] = []
-    private var labels: [UILabel] = []
-    private var notes: [UILabel] = []
-    private var theme = Theme.neutral
+final class SettingsViewController: CardPage {
 
     private let server = SettingsRow(.value("Server"))
     private let syncNow = SettingsRow(.action("Sync now"))
@@ -32,21 +22,16 @@ final class SettingsViewController: UIViewController, Themeable {
     private let rescan = SettingsRow(.action("Rescan library"))
     private let outputNote = UILabel()
 
+    init() {
+        super.init(title: "Settings")
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.addSubview(glow)
-        scroll.alwaysBounceVertical = true
-        scroll.indicatorStyle = .white
-        view.addSubview(scroll)
-        back.addAction(UIAction { [weak self] _ in self?.navigationController?.popViewController(animated: true) }, for: .touchUpInside)
-        heading.text = "Settings"
-        // Fixed above the scrolling cards, so they pass under it rather than under the status bar.
-        view.addSubview(topBar)
-        topBar.addSubview(back)
-        topBar.addSubview(heading)
-        topBar.addSubview(topLine)
-        scroll.delegate = self
-
         section("SERVER", [server, syncNow, onServer, onPhone, autoSync, cellular], note: syncNote)
         section("OUTPUT", [device, rate], note: outputNote)
         section("PLAYBACK", [replayGain, clipping, resume])
@@ -56,7 +41,8 @@ final class SettingsViewController: UIViewController, Themeable {
         section("LIBRARY", [add, rescan], note: libraryNote)
 
         let settings = Settings.shared
-        server.onAction = { [weak self] in self?.editServer() }
+        server.onAction = { [weak self] in self?.navigationController?.pushViewController(ServerViewController(), animated: true) }
+        onServer.onAction = { [weak self] in self?.present(DownloadsViewController.sheet(), animated: true) }
         syncNow.onAction = { Sync.shared.start() }
         autoSync.onToggle = { settings.autoSync = $0 }
         cellular.onToggle = { settings.cellular = $0 }
@@ -76,52 +62,7 @@ final class SettingsViewController: UIViewController, Themeable {
         for name in [Settings.didChange, Library.didChange, Player.didChange, Sync.didChange] {
             center.addObserver(self, selector: #selector(refresh), name: name, object: nil)
         }
-        ThemeCenter.shared.register(self)
         refresh()
-    }
-
-    private func section(_ title: String, _ rows: [SettingsRow], note: UILabel? = nil) {
-        let label = UILabel(font: Fonts.mono(10.5))
-        label.attributedText = NSAttributedString(string: title, attributes: [.kern: 1.0])
-        labels.append(label)
-        scroll.addSubview(label)
-        let card = SettingsCard(rows: rows)
-        cards.append(card)
-        scroll.addSubview(card)
-        if let note {
-            note.font = Fonts.text(12.5)
-            note.numberOfLines = 0
-            note.tag = cards.count - 1
-            notes.append(note)
-            scroll.addSubview(note)
-        }
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        let width = view.bounds.width
-        glow.frame = CGRect(x: 0, y: 0, width: width, height: 300)
-        let top = view.safeAreaInsets.top + 4
-        topBar.frame = CGRect(x: 0, y: 0, width: width, height: top + 44)
-        back.frame = CGRect(x: 4, y: top, width: 44, height: 44)
-        heading.frame = CGRect(x: 48, y: top, width: 200, height: 44)
-        topLine.frame = CGRect(x: 0, y: topBar.bounds.height - UIView.hairline, width: width, height: UIView.hairline)
-        scroll.frame = CGRect(x: 0, y: topBar.frame.maxY, width: width, height: view.bounds.height - topBar.frame.maxY)
-        var y: CGFloat = -8
-        for (i, card) in cards.enumerated() {
-            y += 20
-            labels[i].frame = CGRect(x: 16, y: y, width: width - 32, height: 14)
-            y += 22
-            let height = card.height
-            card.frame = CGRect(x: 12, y: y, width: width - 24, height: height)
-            y += height
-            if let note = notes.first(where: { $0.tag == i }) {
-                let size = note.sizeThatFits(CGSize(width: width - 32, height: 200))
-                note.frame = CGRect(x: 16, y: y + 8, width: width - 32, height: ceil(size.height))
-                y += 8 + ceil(size.height)
-            }
-        }
-        scroll.contentSize = CGSize(width: width, height: y + 32)
     }
 
     @objc private func refresh() {
@@ -145,24 +86,25 @@ final class SettingsViewController: UIViewController, Themeable {
         let sync = Sync.shared
         let configured = Server.shared.isConfigured
         server.value = configured ? Server.shared.host : "SET UP"
-        syncNow.isEnabled = configured && sync.phase != .checking
+        syncNow.isEnabled = configured && sync.phase != .checking && sync.phase != .downloading
         syncNow.bar = nil
         switch sync.phase {
         case .idle:
             syncNow.value = sync.lastSynced == nil ? "" : "UP TO DATE"
-            syncNote.text = sync.lastSynced.map { "Synced \(Self.when($0))." }
-                ?? (configured ? "" : "Connect a Navidrome or Subsonic server to keep your music in step with it.")
+            syncNote.text = !configured ? "Connect a Navidrome or other Subsonic server, and Flaco keeps a copy of its music here."
+                : sync.lastSynced.map { "Synced \(Self.when($0))." } ?? ""
         case .checking:
             syncNow.value = "CHECKING"
+            syncNote.text = ""
         case .downloading:
-            syncNow.value = "\(sync.filesDone) / \(sync.filesTotal)"
+            syncNow.value = "\(Sync.bytes(sync.bytesDone)) / \(Sync.bytes(sync.bytesTotal))"
             syncNow.bar = sync.bytesTotal > 0 ? [Double(sync.bytesDone) / Double(sync.bytesTotal)] : nil
-            syncNote.text = "Downloading \(Sync.bytes(sync.bytesDone)) of \(Sync.bytes(sync.bytesTotal)). It carries on with Flaco closed."
+            syncNote.text = "\(Sync.rate(sync.speed)) · \(sync.filesDone) of \(sync.filesTotal) songs. Carries on with Flaco closed."
         case .failed(let message):
             syncNow.value = "FAILED"
             syncNote.text = message
         }
-        onServer.value = sync.server.map { "\($0.tracks) TRACKS · \(Sync.bytes($0.bytes))" } ?? "—"
+        onServer.value = sync.catalog.isEmpty ? "—" : "\(sync.catalog.count) TRACKS · \(Sync.bytes(sync.serverBytes))"
         let music = Library.shared.tracks.reduce(0) { $0 + $1.size }
         let free = Sync.freeSpace, capacity = Sync.capacity
         onPhone.value = "\(Sync.bytes(music)) · \(Sync.bytes(free)) FREE"
@@ -176,57 +118,6 @@ final class SettingsViewController: UIViewController, Themeable {
         let formatter = DateFormatter()
         formatter.dateFormat = Calendar.current.isDateInToday(date) ? "'at' HH:mm" : "d MMM 'at' HH:mm"
         return formatter.string(from: date)
-    }
-
-    private func editServer() {
-        let current = Server.shared
-        let alert = UIAlertController(title: "Music server", message: current.isConfigured ? "Leave the password empty to keep the saved one." : nil, preferredStyle: .alert)
-        alert.addTextField {
-            $0.placeholder = "music.example.com"
-            $0.text = current.address
-            $0.keyboardType = .URL
-            $0.autocapitalizationType = .none
-            $0.autocorrectionType = .no
-        }
-        alert.addTextField {
-            $0.placeholder = "User"
-            $0.text = current.user
-            $0.autocapitalizationType = .none
-            $0.autocorrectionType = .no
-        }
-        alert.addTextField {
-            $0.placeholder = "Password"
-            $0.isSecureTextEntry = true
-        }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Connect", style: .default) { [weak alert] _ in
-            guard let fields = alert?.textFields, fields.count == 3 else { return }
-            let password = fields[2].text ?? ""
-            current.connect(address: fields[0].text ?? "", user: fields[1].text ?? "", password: password.isEmpty ? nil : password)
-            Sync.shared.start()
-            NotificationCenter.default.post(name: Sync.didChange, object: nil)
-        })
-        present(alert, animated: true)
-    }
-
-    func apply(_ theme: Theme) {
-        self.theme = theme
-        view.backgroundColor = theme.background.color()
-        glow.backgroundColor = theme.glow.color()
-        topBar.backgroundColor = theme.glow.mix(theme.background, 0.12).color()
-        topLine.backgroundColor = theme.line.color()
-        back.tintColor = theme.text.color()
-        heading.textColor = theme.text.color()
-        for label in labels { label.textColor = theme.secondary }
-        for note in notes { note.textColor = theme.secondary }
-        for card in cards { card.apply(theme) }
-    }
-}
-
-extension SettingsViewController: UIScrollViewDelegate {
-    /// The bar's line shows once something has scrolled under it.
-    func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        topLine.alpha = scrollView.contentOffset.y > 1 ? 1 : 0
     }
 }
 
@@ -276,8 +167,11 @@ final class SettingsCard: UIView {
 
 final class SettingsRow: UIView {
     enum Kind {
-        case value(String), toggle(String), choice(String, [String]), action(String)
+        case value(String), toggle(String), choice(String, [String]), action(String), field(String)
     }
+
+    /// The text field of a `.field` row.
+    let field = UITextField()
 
     var onToggle: ((Bool) -> Void)?
     var onChoice: ((Int) -> Void)?
@@ -356,6 +250,13 @@ final class SettingsRow: UIView {
                 }, for: .touchUpInside)
                 addSubview(option)
             }
+        case .field(let title):
+            label.text = title
+            field.font = Fonts.mono(13)
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.clearButtonMode = .whileEditing
+            addSubview(field)
         case .action(let title):
             label.text = title
             addSubview(valueLabel)
@@ -374,6 +275,7 @@ final class SettingsRow: UIView {
         let height = bar == nil ? bounds.height : 44
         label.frame = CGRect(x: 14, y: 0, width: width * 0.55, height: height)
         valueLabel.frame = CGRect(x: width * 0.4, y: 0, width: width * 0.6 - 14, height: height)
+        field.frame = CGRect(x: 104, y: 0, width: width - 104 - 8, height: height)
         barTrack.frame = CGRect(x: 14, y: 44, width: width - 28, height: 3)
         var filled: CGFloat = 0
         for (i, fill) in barFills.enumerated() {
@@ -408,6 +310,11 @@ final class SettingsRow: UIView {
             valueLabel.textColor = theme.accent.color()
         } else {
             valueLabel.textColor = theme.secondary
+        }
+        field.textColor = theme.text.color()
+        field.tintColor = theme.accent.color()
+        if let placeholder = field.placeholder {
+            field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [.foregroundColor: theme.faint])
         }
         barTrack.backgroundColor = theme.line.color()
         barFills[0].backgroundColor = theme.accent.color()

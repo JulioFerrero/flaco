@@ -9,6 +9,7 @@ final class TabsBar: UIView {
     let allButton = TabsBar.tab("All")
     let libraryButton = TabsBar.tab("Library")
     let searchButton = Icon.button("magnifyingglass", 16, "Search")
+    let syncButton = UIButton(type: .custom)
     let settingsButton = Icon.button("slider.horizontal.3", 16, "Settings")
     var selected = Tab.all { didSet { restyle() } }
 
@@ -25,9 +26,22 @@ final class TabsBar: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        for view in [allButton, libraryButton, searchButton, settingsButton, underline, line] as [UIView] {
+        for view in [allButton, libraryButton, searchButton, settingsButton, syncButton, underline, line] as [UIView] {
             addSubview(view)
         }
+        syncButton.setImage(Icon.image("arrow.down", 11, .semibold), for: .normal)
+        syncButton.titleLabel?.font = Fonts.mono(11)
+        syncButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: -3, bottom: 0, right: 3)
+        syncButton.accessibilityLabel = "Downloads"
+        syncButton.isHidden = true
+    }
+
+    /// While a sync runs: how far along it is. Nil hides it.
+    func showSync(_ text: String?) {
+        syncButton.isHidden = text == nil
+        guard let text, syncButton.title(for: .normal) != text else { return }
+        syncButton.setTitle(text, for: .normal)
+        setNeedsLayout()
     }
 
     required init?(coder: NSCoder) {
@@ -44,6 +58,8 @@ final class TabsBar: UIView {
         }
         settingsButton.frame = CGRect(x: bounds.width - 46, y: 0, width: 44, height: 44)
         searchButton.frame = CGRect(x: bounds.width - 90, y: 0, width: 44, height: 44)
+        let syncWidth = ceil(syncButton.intrinsicContentSize.width) + 16
+        syncButton.frame = CGRect(x: searchButton.frame.minX - syncWidth, y: 0, width: syncWidth, height: 44)
         let active = selected == .all ? allButton : libraryButton
         underline.frame = CGRect(x: active.frame.minX, y: 42, width: active.frame.width, height: 2)
         line.frame = CGRect(x: 0, y: 44, width: bounds.width, height: UIView.hairline)
@@ -58,6 +74,8 @@ final class TabsBar: UIView {
         allButton.setTitleColor(selected == .all ? theme.text.color() : theme.secondary, for: .normal)
         libraryButton.setTitleColor(selected == .library ? theme.text.color() : theme.secondary, for: .normal)
         searchButton.tintColor = theme.text.color()
+        syncButton.tintColor = theme.accent.color()
+        syncButton.setTitleColor(theme.accent.color(), for: .normal)
         settingsButton.tintColor = theme.text.color()
         underline.backgroundColor = theme.accent.color()
         line.backgroundColor = theme.line.color()

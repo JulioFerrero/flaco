@@ -6,16 +6,17 @@ import Foundation
 final class Sync: NSObject {
     static let shared = Sync()
     static let didChange = Notification.Name("FlacoSyncDidChange")
+    /// The list of songs on the server changed, not just the progress.
+    static let catalogDidChange = Notification.Name("FlacoSyncCatalogDidChange")
 
     enum Phase: Equatable {
         case idle, checking, downloading
         case failed(String)
     }
 
-    struct Stats: Codable {
-        var tracks = 0
-        var albums = 0
-        var bytes: Int64 = 0
+    enum Status: Equatable {
+        case onPhone, waiting, failed, notDownloaded
+        case downloading(Int64)
     }
 
     /// A file the server gave us, by server id.
@@ -49,7 +50,8 @@ final class Sync: NSObject {
 
     // Main thread, like the session's delegate calls.
     private(set) var phase = Phase.idle
-    private(set) var server: Stats?
+    /// Everything on the server at the last check, in folder order.
+    private(set) var catalog: [Server.Song] = []
     private(set) var filesDone = 0
     private(set) var filesTotal = 0
     private(set) var bytesTotal: Int64 = 0
@@ -57,18 +59,28 @@ final class Sync: NSObject {
     var backgroundCompletion: (() -> Void)?
 
     var bytesDone: Int64 { bytesFinished + written.values.reduce(0, +) }
+    var serverBytes: Int64 { catalog.reduce(0) { $0 + $1.size } }
+
+    /// Bytes per second over the last few seconds.
+    var speed: Double {
+        guard let first = samples.first, let last = samples.last, last.time > first.time else { return 0 }
+        return Double(last.bytes - first.bytes) / last.time.timeIntervalSince(first.time)
+    }
 
     private var manifest: [String: Entry] = [:]
     private var active: Set<String> = []
     private var written: [String: Int64] = [:]
+    private var failed: Set<String> = []
     private var bytesFinished: Int64 = 0
-    private var failures = 0
+    private var samples: [(time: Date, bytes: Int64)] = []
     private var started = Date()
     private var lastNotice = Date.distantPast
+    private var lastScan = Date.distantPast
     private var scanPending = false
     private var connected = false
 
     private let manifestURL = Library.support.appendingPathComponent("sync.json")
+    private let catalogURL = Library.support.appendingPathComponent("catalog.json")
     private let defaults = UserDefaults.standard
 
     private lazy var session: URLSession = {
@@ -85,8 +97,18 @@ final class Sync: NSObject {
            let saved = try? JSONDecoder().decode([String: Entry].self, from: data) {
             manifest = saved
         }
-        if let data = defaults.data(forKey: "syncServer") { server = try? JSONDecoder().decode(Stats.self, from: data) }
+        if let data = try? Data(contentsOf: catalogURL),
+           let saved = try? JSONDecoder().decode([Server.Song].self, from: data) {
+            catalog = saved
+        }
         lastSynced = defaults.object(forKey: "syncLast") as? Date
+    }
+
+    func status(of song: Server.Song) -> Status {
+        if let bytes = written[song.id] { return .downloading(bytes) }
+        if active.contains(song.id) { return .waiting }
+        if manifest[song.id] != nil { return .onPhone }
+        return failed.contains(song.id) ? .failed : .notDownloaded
     }
 
     /// Picks up downloads left running by an earlier launch.
@@ -102,6 +124,7 @@ final class Sync: NSObject {
                 self.filesTotal = jobs.count
                 self.bytesFinished = 0
                 self.bytesTotal = jobs.reduce(0) { $0 + $1.size }
+                self.samples = []
                 self.phase = .downloading
                 self.notify()
             }
@@ -116,7 +139,7 @@ final class Sync: NSObject {
     }
 
     func start() {
-        guard Server.shared.isConfigured, phase != .checking else { return }
+        guard Server.shared.isConfigured, phase != .checking, phase != .downloading else { return }
         reconnect()
         phase = .checking
         notify()
@@ -132,26 +155,29 @@ final class Sync: NSObject {
         }
     }
 
-    /// Changing servers keeps the music on the phone, but stops treating it as the old server's.
+    /// Without a server the music stays on the phone, but is no longer treated as the server's.
     func forgetServer() {
         session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
         manifest = [:]
+        catalog = []
         active = []
-        server = nil
+        written = [:]
+        failed = []
         lastSynced = nil
         phase = .idle
         saveManifest()
-        defaults.removeObject(forKey: "syncServer")
+        try? FileManager.default.removeItem(at: catalogURL)
         defaults.removeObject(forKey: "syncLast")
+        NotificationCenter.default.post(name: Self.catalogDidChange, object: nil)
         notify()
     }
 
     // MARK: Planning
 
     private func plan(_ listing: Server.Listing, running: Set<String>) {
-        let songs = listing.songs
-        server = Stats(tracks: songs.count, albums: Set(songs.map(\.album)).count, bytes: songs.reduce(0) { $0 + $1.size })
-        if let data = try? JSONEncoder().encode(server) { defaults.set(data, forKey: "syncServer") }
+        let songs = listing.songs.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        catalog = songs
+        if let data = try? JSONEncoder().encode(songs) { try? data.write(to: catalogURL, options: .atomic) }
 
         // A server that lists nothing, or is mid-scan, may be wrong about what's gone.
         var removed = 0
@@ -170,17 +196,20 @@ final class Sync: NSObject {
                 // Already here, from an earlier sync or copied by hand.
                 manifest[song.id] = Entry(path: song.path, size: song.size)
             } else {
+                manifest[song.id] = nil
                 wanted.append(song)
             }
         }
         saveManifest()
-        if removed > 0 { scheduleScan() }
+        failed = []
+        if removed > 0 { scanSoon() }
 
         let needed = wanted.filter { !running.contains($0.id) }.reduce(0) { $0 + $1.size }
         let free = Self.freeSpace
         if needed > 0, needed + 300_000_000 > free {
             phase = .failed("Needs \(Self.bytes(needed)), \(Self.bytes(free)) free.")
             Log.write("sync: \(wanted.count) to download (\(Self.bytes(needed))) but only \(Self.bytes(free)) free")
+            NotificationCenter.default.post(name: Self.catalogDidChange, object: nil)
             notify()
             return
         }
@@ -200,9 +229,10 @@ final class Sync: NSObject {
         filesTotal = wanted.count
         bytesFinished = 0
         bytesTotal = wanted.reduce(0) { $0 + $1.size }
-        failures = 0
+        samples = []
         started = Date()
         Log.write("sync: \(songs.count) on the server, \(wanted.count) to download (\(Self.bytes(bytesTotal))), \(removed) removed")
+        NotificationCenter.default.post(name: Self.catalogDidChange, object: nil)
         if wanted.isEmpty {
             finish()
         } else {
@@ -213,9 +243,10 @@ final class Sync: NSObject {
 
     private func finish() {
         saveManifest()
-        scheduleScan()
-        if failures > 0 {
-            phase = .failed(failures == 1 ? "1 file didn't download." : "\(failures) files didn't download.")
+        scanSoon(force: true)
+        samples = []
+        if !failed.isEmpty {
+            phase = .failed(failed.count == 1 ? "1 song didn't download." : "\(failed.count) songs didn't download.")
         } else {
             phase = .idle
             lastSynced = Date()
@@ -223,7 +254,7 @@ final class Sync: NSObject {
         }
         if filesTotal > 0 {
             let seconds = Date().timeIntervalSince(started)
-            Log.write(String(format: "sync: %d downloaded, %d failed, %@ in %.0f s (%.1f MB/s)", filesDone, failures,
+            Log.write(String(format: "sync: %d downloaded, %d failed, %@ in %.0f s (%.1f MB/s)", filesDone, failed.count,
                              Self.bytes(bytesFinished), seconds, Double(bytesFinished) / max(seconds, 1) / 1e6))
         }
         notify()
@@ -249,19 +280,27 @@ final class Sync: NSObject {
         if let data = try? JSONEncoder().encode(manifest) { try? data.write(to: manifestURL, options: .atomic) }
     }
 
-    /// New files reach the library a few at a time rather than in one scan at the end.
-    private func scheduleScan() {
+    /// New songs join the library every ten seconds or so while downloading, not one by one.
+    private func scanSoon(force: Bool = false) {
         guard !scanPending else { return }
+        let wait = force ? 1 : max(1, 10 - Date().timeIntervalSince(lastScan))
         scanPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
             self.scanPending = false
+            self.lastScan = Date()
             Library.shared.scan()
         }
     }
 
+    /// At most four times a second, which is what the progress on screen needs.
     private func notify(throttled: Bool = false) {
-        if throttled, Date().timeIntervalSince(lastNotice) < 0.25 { return }
-        lastNotice = Date()
+        let now = Date()
+        if throttled, now.timeIntervalSince(lastNotice) < 0.25 { return }
+        lastNotice = now
+        if phase == .downloading {
+            samples.append((now, bytesDone))
+            samples.removeAll { now.timeIntervalSince($0.time) > 3 }
+        }
         NotificationCenter.default.post(name: Self.didChange, object: nil)
     }
 
@@ -281,6 +320,11 @@ final class Sync: NSObject {
     static func bytes(_ count: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
+
+    /// "21.4 MB/s", or "640 KB/s" when slow.
+    static func rate(_ bytesPerSecond: Double) -> String {
+        bytes(Int64(bytesPerSecond)) + "/s"
+    }
 }
 
 extension Sync: URLSessionDownloadDelegate {
@@ -297,7 +341,7 @@ extension Sync: URLSessionDownloadDelegate {
         let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
         let size = Self.size(of: location) ?? 0
         guard status == 200, size == job.size else {
-            failures += 1
+            failed.insert(job.id)
             Log.write("sync: \(job.path) came back \(status) with \(size) of \(job.size) bytes")
             return
         }
@@ -308,7 +352,7 @@ extension Sync: URLSessionDownloadDelegate {
         do {
             try fm.moveItem(at: location, to: target)
         } catch {
-            failures += 1
+            failed.insert(job.id)
             Log.write("sync: couldn't place \(job.path): \(error.localizedDescription)")
             return
         }
@@ -316,14 +360,14 @@ extension Sync: URLSessionDownloadDelegate {
         filesDone += 1
         bytesFinished += job.size
         if filesDone % 10 == 0 { saveManifest() }
-        scheduleScan()
+        scanSoon()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let job = Job(task) else { return }
         written[job.id] = nil
         if let error, (error as NSError).code != NSURLErrorCancelled {
-            failures += 1
+            failed.insert(job.id)
             Log.write("sync: \(job.path) failed: \(error.localizedDescription)")
         }
         guard active.remove(job.id) != nil else { return }
