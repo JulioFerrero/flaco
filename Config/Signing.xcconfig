@@ -1,9 +1,0 @@
-// Signing. To build for your own phone, make Config/Local.xcconfig (git ignores it) with your team,
-// and a bundle identifier of your own if this one is taken:
-//
-//   DEVELOPMENT_TEAM = ABCDE12345
-//   FLACO_BUNDLE_ID = com.yourname.flaco
-
-FLACO_BUNDLE_ID = dev.julio.flaco
-
-#include? "Local.xcconfig"

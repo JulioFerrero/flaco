@@ -2,5 +2,4 @@
 build/
 DerivedData/
 *.xcodeproj/
-Flaco/Info.plist
 Config/Local.xcconfig
